@@ -7,7 +7,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .core import build_format_selector, build_output_template, media_info_from_ydl, normalize_url
+from .core import (
+    build_cookies_from_browser,
+    build_format_selector,
+    build_output_template,
+    media_info_from_ydl,
+    normalize_url,
+    resolve_cookie_file,
+)
 from .models import DownloadPreset, MediaInfo
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -29,10 +36,15 @@ class MediaBackend:
     def reset_cancel(self) -> None:
         self._cancel_event.clear()
 
-    def inspect(self, raw_url: str) -> MediaInfo:
+    def inspect(
+        self,
+        raw_url: str,
+        cookies_browser: str | None = None,
+        cookies_file: str | None = None,
+    ) -> MediaInfo:
         url = normalize_url(raw_url)
         yt_dlp = _import_yt_dlp()
-        with yt_dlp.YoutubeDL(self._base_options()) as ydl:
+        with yt_dlp.YoutubeDL(self._base_options(cookies_browser, cookies_file)) as ydl:
             info = ydl.extract_info(url, download=False)
         if not isinstance(info, dict):
             raise RuntimeError("無法取得影片資訊。")
@@ -44,6 +56,8 @@ class MediaBackend:
         preset: DownloadPreset,
         download_dir: Path,
         progress_callback: ProgressCallback | None = None,
+        cookies_browser: str | None = None,
+        cookies_file: str | None = None,
     ) -> Path:
         url = normalize_url(raw_url)
         download_dir = download_dir.expanduser().resolve()
@@ -58,7 +72,7 @@ class MediaBackend:
             if progress_callback:
                 progress_callback(data)
 
-        options = self._base_options()
+        options = self._base_options(cookies_browser, cookies_file)
         options.update(
             {
                 "format": build_format_selector(preset),
@@ -115,7 +129,10 @@ class MediaBackend:
         return prepared
 
     @staticmethod
-    def _base_options() -> dict[str, Any]:
+    def _base_options(
+        cookies_browser: str | None = None,
+        cookies_file: str | None = None,
+    ) -> dict[str, Any]:
         options: dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
@@ -126,6 +143,12 @@ class MediaBackend:
         deno_path = _deno_location()
         if deno_path is not None:
             options["js_runtimes"] = {"deno": {"path": deno_path}}
+        cookies = build_cookies_from_browser(cookies_browser)
+        if cookies is not None:
+            options["cookiesfrombrowser"] = cookies
+        cookie_file = resolve_cookie_file(cookies_file)
+        if cookie_file is not None:
+            options["cookiefile"] = cookie_file
         return options
 
 

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from ..backend import MediaBackend
 from ..core import format_bytes, format_duration, normalize_url
-from ..models import DownloadPreset, MediaInfo
+from ..models import COOKIE_BROWSERS, COOKIE_FILE_OPTION, DownloadPreset, MediaInfo
 from .workers import DownloadWorker, InspectWorker
 
 
@@ -32,8 +32,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MediaFetch")
-        self.resize(760, 520)
-        self.setMinimumSize(680, 470)
+        self.resize(760, 560)
+        self.setMinimumSize(680, 510)
 
         self._settings = QSettings("shellpig", "MediaFetch")
         self._backend = MediaBackend()
@@ -99,11 +99,31 @@ class MainWindow(QMainWindow):
         self.directory_edit.setReadOnly(True)
         self.browse_button = QPushButton("瀏覽")
         self.browse_button.clicked.connect(self.choose_directory)
+        self.cookies_combo = QComboBox()
+        self.cookies_combo.addItem("不使用（只下載公開內容）", "")
+        for browser in COOKIE_BROWSERS:
+            self.cookies_combo.addItem(browser.capitalize(), browser)
+        self.cookies_combo.addItem("cookies.txt 檔案", COOKIE_FILE_OPTION)
+        self.cookies_combo.currentIndexChanged.connect(self._update_cookie_file_row)
+        self.cookies_combo.setToolTip(
+            "從已登入的瀏覽器讀取 cookies，用來下載需要登入才看得到的內容。"
+            "\n讀取前請先關閉該瀏覽器，否則 cookies 資料庫可能被鎖住。"
+        )
         options_layout.addWidget(QLabel("格式"), 0, 0)
         options_layout.addWidget(self.preset_combo, 0, 1, 1, 2)
         options_layout.addWidget(QLabel("儲存位置"), 1, 0)
         options_layout.addWidget(self.directory_edit, 1, 1)
         options_layout.addWidget(self.browse_button, 1, 2)
+        options_layout.addWidget(QLabel("登入 Cookies"), 2, 0)
+        options_layout.addWidget(self.cookies_combo, 2, 1, 1, 2)
+        self.cookie_file_edit = QLineEdit()
+        self.cookie_file_edit.setReadOnly(True)
+        self.cookie_file_edit.setPlaceholderText("選擇 Netscape 格式的 cookies.txt")
+        self.cookie_file_button = QPushButton("選擇")
+        self.cookie_file_button.clicked.connect(self.choose_cookie_file)
+        options_layout.addWidget(QLabel("cookies.txt"), 3, 0)
+        options_layout.addWidget(self.cookie_file_edit, 3, 1)
+        options_layout.addWidget(self.cookie_file_button, 3, 2)
         options_layout.setColumnStretch(1, 1)
         layout.addWidget(options_box)
 
@@ -150,10 +170,48 @@ class MainWindow(QMainWindow):
         saved_preset = str(self._settings.value("preset", DownloadPreset.MP4_1080.value))
         index = self.preset_combo.findData(saved_preset)
         self.preset_combo.setCurrentIndex(index if index >= 0 else 0)
+        saved_browser = str(self._settings.value("cookies_browser", ""))
+        cookies_index = self.cookies_combo.findData(saved_browser)
+        self.cookies_combo.setCurrentIndex(cookies_index if cookies_index >= 0 else 0)
+        self.cookie_file_edit.setText(str(self._settings.value("cookies_file", "")))
 
     def _save_settings(self) -> None:
         self._settings.setValue("download_dir", self.directory_edit.text())
         self._settings.setValue("preset", self.preset_combo.currentData())
+        self._settings.setValue("cookies_browser", self.cookies_combo.currentData())
+        self._settings.setValue("cookies_file", self.cookie_file_edit.text())
+
+    def _selected_cookies_browser(self) -> str | None:
+        data = str(self.cookies_combo.currentData())
+        return data if data in COOKIE_BROWSERS else None
+
+    def _selected_cookies_file(self) -> str | None:
+        if str(self.cookies_combo.currentData()) != COOKIE_FILE_OPTION:
+            return None
+        return self.cookie_file_edit.text().strip() or None
+
+    def _update_cookie_file_row(self) -> None:
+        uses_file = str(self.cookies_combo.currentData()) == COOKIE_FILE_OPTION
+        self.cookie_file_edit.setEnabled(uses_file)
+        self.cookie_file_button.setEnabled(uses_file)
+
+    def _cookies_ready(self) -> bool:
+        if str(self.cookies_combo.currentData()) != COOKIE_FILE_OPTION:
+            return True
+        if self.cookie_file_edit.text().strip():
+            return True
+        self._show_error("請先選擇 cookies.txt 檔案。")
+        return False
+
+    @Slot()
+    def choose_cookie_file(self) -> None:
+        current = self.cookie_file_edit.text() or str(Path.home())
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "選擇 cookies.txt", current, "cookies.txt (*.txt);;所有檔案 (*)"
+        )
+        if chosen:
+            self.cookie_file_edit.setText(chosen)
+            self._save_settings()
 
     @Slot()
     def paste_url(self) -> None:
@@ -180,9 +238,15 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return
 
+        if not self._cookies_ready():
+            return
+
+        self._save_settings()
         self._set_busy_state("正在解析影片資訊…", cancellable=False)
         thread = QThread(self)
-        worker = InspectWorker(self._backend, url)
+        worker = InspectWorker(
+            self._backend, url, self._selected_cookies_browser(), self._selected_cookies_file()
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._inspect_succeeded)
@@ -229,6 +293,9 @@ class MainWindow(QMainWindow):
             self._show_error(f"無法使用下載資料夾：{exc}")
             return
 
+        if not self._cookies_ready():
+            return
+
         self._save_settings()
         self._backend.reset_cancel()
         preset = DownloadPreset(str(self.preset_combo.currentData()))
@@ -236,7 +303,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 0)
 
         thread = QThread(self)
-        worker = DownloadWorker(self._backend, url, preset, directory)
+        worker = DownloadWorker(
+            self._backend,
+            url,
+            preset,
+            directory,
+            self._selected_cookies_browser(),
+            self._selected_cookies_file(),
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._download_progress)
@@ -343,6 +417,9 @@ class MainWindow(QMainWindow):
         self.paste_button.setEnabled(False)
         self.inspect_button.setEnabled(False)
         self.preset_combo.setEnabled(False)
+        self.cookies_combo.setEnabled(False)
+        self.cookie_file_edit.setEnabled(False)
+        self.cookie_file_button.setEnabled(False)
         self.browse_button.setEnabled(False)
         self.download_button.setEnabled(False)
         self.cancel_button.setEnabled(cancellable)
@@ -353,6 +430,8 @@ class MainWindow(QMainWindow):
         self.paste_button.setEnabled(True)
         self.inspect_button.setEnabled(True)
         self.preset_combo.setEnabled(True)
+        self.cookies_combo.setEnabled(True)
+        self._update_cookie_file_row()
         self.browse_button.setEnabled(True)
         self.download_button.setEnabled(True)
         self.cancel_button.setEnabled(False)

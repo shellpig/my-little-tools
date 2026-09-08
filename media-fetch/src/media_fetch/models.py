@@ -51,3 +51,16 @@ class MediaInfo:
         if self.height:
             return f"{self.height}p"
         return "未知"
+
+
+COOKIE_BROWSERS: tuple[str, ...] = (
+    "chrome",
+    "edge",
+    "firefox",
+    "brave",
+    "chromium",
+    "opera",
+    "vivaldi",
+)
+
+COOKIE_FILE_OPTION = "file"

@@ -3,13 +3,16 @@ from pathlib import Path
 import pytest
 
 from media_fetch.core import (
+    InvalidCookieFile,
     InvalidMediaUrl,
+    build_cookies_from_browser,
     build_format_selector,
     build_output_template,
     format_bytes,
     format_duration,
     media_info_from_ydl,
     normalize_url,
+    resolve_cookie_file,
 )
 from media_fetch.models import DownloadPreset
 
@@ -71,3 +74,34 @@ def test_media_info_from_ydl_prefers_requested_dimensions() -> None:
     assert info.platform_label == "YouTube"
     assert info.duration_seconds == 61
     assert info.resolution_label == "1920×1080"
+
+
+def test_build_cookies_from_browser_returns_none_without_selection() -> None:
+    assert build_cookies_from_browser(None) is None
+    assert build_cookies_from_browser("") is None
+
+
+def test_build_cookies_from_browser_builds_yt_dlp_tuple() -> None:
+    assert build_cookies_from_browser("chrome") == ("chrome", None, None, None)
+
+
+def test_build_cookies_from_browser_rejects_unknown_browser() -> None:
+    with pytest.raises(ValueError):
+        build_cookies_from_browser("netscape")
+
+
+def test_resolve_cookie_file_returns_none_without_selection() -> None:
+    assert resolve_cookie_file(None) is None
+    assert resolve_cookie_file("") is None
+
+
+def test_resolve_cookie_file_accepts_existing_file(tmp_path: Path) -> None:
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File", encoding="utf-8")
+
+    assert resolve_cookie_file(str(cookie_file)) == str(cookie_file)
+
+
+def test_resolve_cookie_file_rejects_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(InvalidCookieFile):
+        resolve_cookie_file(str(tmp_path / "missing.txt"))

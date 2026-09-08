@@ -13,15 +13,25 @@ class InspectWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, backend: MediaBackend, url: str) -> None:
+    def __init__(
+        self,
+        backend: MediaBackend,
+        url: str,
+        cookies_browser: str | None,
+        cookies_file: str | None,
+    ) -> None:
         super().__init__()
         self._backend = backend
         self._url = url
+        self._cookies_browser = cookies_browser
+        self._cookies_file = cookies_file
 
     @Slot()
     def run(self) -> None:
         try:
-            info: MediaInfo = self._backend.inspect(self._url)
+            info: MediaInfo = self._backend.inspect(
+                self._url, self._cookies_browser, self._cookies_file
+            )
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -40,12 +50,16 @@ class DownloadWorker(QObject):
         url: str,
         preset: DownloadPreset,
         download_dir: Path,
+        cookies_browser: str | None,
+        cookies_file: str | None,
     ) -> None:
         super().__init__()
         self._backend = backend
         self._url = url
         self._preset = preset
         self._download_dir = download_dir
+        self._cookies_browser = cookies_browser
+        self._cookies_file = cookies_file
 
     @Slot()
     def run(self) -> None:
@@ -55,6 +69,8 @@ class DownloadWorker(QObject):
                 self._preset,
                 self._download_dir,
                 self._emit_progress,
+                self._cookies_browser,
+                self._cookies_file,
             )
         except DownloadCancelled as exc:
             self.cancelled.emit(str(exc))

@@ -13,6 +13,7 @@ MediaFetch 是 `my-little-tools` 裡的一個獨立 Windows 桌面小工具，�
   - MP4 1080p 以下。
   - MP4 720p 以下。
   - MP3 192 kbps。
+- 提供登入 Cookies：從瀏覽器讀取，或指定 Netscape 格式的 cookies.txt。
 - 選擇並記住下載資料夾。
 - 顯示下載進度、速度與剩餘時間。
 - 取消下載。
@@ -21,6 +22,17 @@ MediaFetch 是 `my-little-tools` 裡的一個獨立 Windows 桌面小工具，�
 - YouTube 的 JavaScript challenge 支援使用 Deno；開發/打包腳本會準備固定版本的 Windows x64 Deno。
 
 目標網站包含 YouTube、Instagram、Facebook、X、TikTok；實際可下載內容仍取決於 `yt-dlp` 對網站當下版本的支援，以及內容是否需要登入、是否有地區限制或 DRM。
+
+## 登入 Cookies
+
+需要登入才看得到的內容，可以在「登入 Cookies」提供登入狀態，有兩種來源：
+
+- **從瀏覽器讀取**：選擇對應的瀏覽器。讀取前請先完全關閉該瀏覽器，否則 cookies 資料庫會被鎖住。
+- **cookies.txt 檔案**：指定 Netscape 格式的 cookies.txt。
+
+Chrome 127 起以 App-Bound Encryption 保護 cookies 的加密金鑰，yt-dlp 無法解密，Edge 也一樣；這兩個瀏覽器即使完全關閉仍讀不到，只能改用 cookies.txt。Firefox 的 cookies 未經作業系統加密，可直接讀取。
+
+cookies.txt 等同帳號登入憑證，請勿分享，也不要提交到版本控制。
 
 ## 使用限制
 
@@ -84,7 +96,6 @@ media-fetch/
 ## V0.1 暫不處理
 
 - 播放清單 / 批次下載。
-- Cookies / 瀏覽器登入狀態匯入。
 - 字幕與縮圖下載。
 - yt-dlp 核心自動更新按鈕。
 - 應用程式自動更新。

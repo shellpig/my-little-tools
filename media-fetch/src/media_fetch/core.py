@@ -3,10 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .models import DownloadPreset, MediaInfo
+from .models import COOKIE_BROWSERS, DownloadPreset, MediaInfo
 
 
 class InvalidMediaUrl(ValueError):
+    pass
+
+
+class InvalidCookieFile(ValueError):
     pass
 
 
@@ -59,6 +63,25 @@ def build_format_selector(preset: DownloadPreset) -> str:
     if preset is DownloadPreset.MP3:
         return "bestaudio/best"
     raise ValueError(f"Unsupported preset: {preset}")
+
+
+def build_cookies_from_browser(browser: str | None) -> tuple[str, None, None, None] | None:
+    """Build yt-dlp's `cookiesfrombrowser` value, or None when cookies are not used."""
+    if not browser:
+        return None
+    if browser not in COOKIE_BROWSERS:
+        raise ValueError(f"Unsupported cookie browser: {browser}")
+    return (browser, None, None, None)
+
+
+def resolve_cookie_file(path: str | None) -> str | None:
+    """Validate a Netscape-format cookies.txt path, or None when it is not used."""
+    if not path:
+        return None
+    resolved = Path(path).expanduser()
+    if not resolved.is_file():
+        raise InvalidCookieFile("找不到 cookies.txt 檔案，請重新選擇。")
+    return str(resolved)
 
 
 def build_output_template(download_dir: Path) -> str:
