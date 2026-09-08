@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from ..backend import MediaBackend
 from ..core import InvalidMediaUrl, format_bytes, format_duration, normalize_url
 from ..models import COOKIE_BROWSERS, COOKIE_FILE_OPTION, DownloadPreset, MediaInfo
+from .theme import APP_STYLESHEET
 from .workers import DownloadWorker, InspectWorker
 
 
@@ -32,8 +33,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MediaFetch")
-        self.resize(760, 560)
-        self.setMinimumSize(680, 510)
+        self.resize(760, 720)
+        self.setMinimumSize(680, 660)
+        self.setStyleSheet(APP_STYLESHEET)
 
         self._settings = QSettings("shellpig", "MediaFetch")
         self._backend = MediaBackend()
@@ -52,14 +54,15 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         root = QWidget(self)
+        root.setObjectName("centralWidget")
         layout = QVBoxLayout(root)
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(16)
 
         title = QLabel("MediaFetch")
-        title.setStyleSheet("font-size: 26px; font-weight: 700;")
+        title.setObjectName("titleLabel")
         subtitle = QLabel("貼上公開影片網址，解析後選擇格式並下載到電腦。")
-        subtitle.setStyleSheet("color: #666;")
+        subtitle.setObjectName("subtitleLabel")
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
@@ -80,24 +83,36 @@ class MainWindow(QMainWindow):
 
         info_box = QGroupBox("影片資訊")
         info_layout = QGridLayout(info_box)
+        info_layout.setVerticalSpacing(8)
+        info_layout.setHorizontalSpacing(14)
         self.platform_value = QLabel("—")
+        self.platform_value.setObjectName("platformBadge")
         self.title_value = QLabel("尚未解析")
+        self.title_value.setObjectName("infoValue")
         self.title_value.setWordWrap(True)
         self.duration_value = QLabel("—")
+        self.duration_value.setObjectName("infoValue")
         self.resolution_value = QLabel("—")
-        info_layout.addWidget(QLabel("來源"), 0, 0)
-        info_layout.addWidget(self.platform_value, 0, 1)
-        info_layout.addWidget(QLabel("標題"), 1, 0)
-        info_layout.addWidget(self.title_value, 1, 1)
-        info_layout.addWidget(QLabel("長度"), 2, 0)
-        info_layout.addWidget(self.duration_value, 2, 1)
-        info_layout.addWidget(QLabel("解析度"), 3, 0)
-        info_layout.addWidget(self.resolution_value, 3, 1)
+        self.resolution_value.setObjectName("infoValue")
+
+        for row, (text, val_widget) in enumerate([
+            ("來源", self.platform_value),
+            ("標題", self.title_value),
+            ("長度", self.duration_value),
+            ("解析度", self.resolution_value),
+        ]):
+            lbl = QLabel(text)
+            lbl.setObjectName("infoKey")
+            info_layout.addWidget(lbl, row, 0)
+            info_layout.addWidget(val_widget, row, 1)
+
         info_layout.setColumnStretch(1, 1)
         layout.addWidget(info_box)
 
         options_box = QGroupBox("下載設定")
         options_layout = QGridLayout(options_box)
+        options_layout.setVerticalSpacing(10)
+        options_layout.setHorizontalSpacing(14)
         self.preset_combo = QComboBox()
         for preset in DownloadPreset:
             self.preset_combo.addItem(preset.label, preset.value)
@@ -115,21 +130,35 @@ class MainWindow(QMainWindow):
             "從已登入的瀏覽器讀取 cookies，用來下載需要登入才看得到的內容。"
             "\n讀取前請先關閉該瀏覽器，否則 cookies 資料庫可能被鎖住。"
         )
-        options_layout.addWidget(QLabel("格式"), 0, 0)
+
+        preset_lbl = QLabel("格式")
+        preset_lbl.setObjectName("infoKey")
+        options_layout.addWidget(preset_lbl, 0, 0)
         options_layout.addWidget(self.preset_combo, 0, 1, 1, 2)
-        options_layout.addWidget(QLabel("儲存位置"), 1, 0)
+
+        dir_lbl = QLabel("儲存位置")
+        dir_lbl.setObjectName("infoKey")
+        options_layout.addWidget(dir_lbl, 1, 0)
         options_layout.addWidget(self.directory_edit, 1, 1)
         options_layout.addWidget(self.browse_button, 1, 2)
-        options_layout.addWidget(QLabel("登入 Cookies"), 2, 0)
+
+        cookies_lbl = QLabel("登入 Cookies")
+        cookies_lbl.setObjectName("infoKey")
+        options_layout.addWidget(cookies_lbl, 2, 0)
         options_layout.addWidget(self.cookies_combo, 2, 1, 1, 2)
+
         self.cookie_file_edit = QLineEdit()
         self.cookie_file_edit.setReadOnly(True)
         self.cookie_file_edit.setPlaceholderText("選擇 Netscape 格式的 cookies.txt")
         self.cookie_file_button = QPushButton("選擇")
         self.cookie_file_button.clicked.connect(self.choose_cookie_file)
-        options_layout.addWidget(QLabel("cookies.txt"), 3, 0)
+
+        cookie_file_lbl = QLabel("cookies.txt")
+        cookie_file_lbl.setObjectName("infoKey")
+        options_layout.addWidget(cookie_file_lbl, 3, 0)
         options_layout.addWidget(self.cookie_file_edit, 3, 1)
         options_layout.addWidget(self.cookie_file_button, 3, 2)
+
         options_layout.setColumnStretch(1, 1)
         layout.addWidget(options_box)
 
@@ -140,20 +169,25 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("準備就緒")
+        self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("color: #555;")
         layout.addWidget(self.status_label)
 
         actions = QHBoxLayout()
+        actions.setSpacing(10)
         self.download_button = QPushButton("開始下載")
-        self.download_button.setMinimumHeight(38)
+        self.download_button.setObjectName("primaryButton")
+        self.download_button.setMinimumHeight(40)
         self.download_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.download_button.clicked.connect(self.start_download)
         self.cancel_button = QPushButton("取消")
+        self.cancel_button.setMinimumHeight(40)
         self.cancel_button.clicked.connect(self.cancel_download)
         self.open_file_button = QPushButton("開啟檔案")
+        self.open_file_button.setMinimumHeight(40)
         self.open_file_button.clicked.connect(self.open_last_file)
         self.open_folder_button = QPushButton("開啟資料夾")
+        self.open_folder_button.setMinimumHeight(40)
         self.open_folder_button.clicked.connect(self.open_download_folder)
         actions.addWidget(self.download_button, 1)
         actions.addWidget(self.cancel_button)
@@ -162,7 +196,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(actions)
 
         disclaimer = QLabel("請只下載你有權存取與保存的內容；MediaFetch 不處理 DRM 繞過。")
-        disclaimer.setStyleSheet("color: #777; font-size: 11px;")
+        disclaimer.setObjectName("disclaimerLabel")
         disclaimer.setWordWrap(True)
         layout.addWidget(disclaimer)
         layout.addStretch(1)
