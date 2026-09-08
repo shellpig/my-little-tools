@@ -45,16 +45,16 @@ def format_bytes(value: int | float | None) -> str:
 
 def build_format_selector(preset: DownloadPreset) -> str:
     if preset is DownloadPreset.BEST_MP4:
-        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
     if preset is DownloadPreset.MP4_1080:
         return (
             "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/"
-            "best[height<=1080][ext=mp4]/best[height<=1080]"
+            "best[height<=1080][ext=mp4]"
         )
     if preset is DownloadPreset.MP4_720:
         return (
             "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
-            "best[height<=720][ext=mp4]/best[height<=720]"
+            "best[height<=720][ext=mp4]"
         )
     if preset is DownloadPreset.MP3:
         return "bestaudio/best"

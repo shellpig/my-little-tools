@@ -36,9 +36,16 @@ def test_format_bytes() -> None:
     assert format_bytes(None) == ""
 
 
-def test_build_format_selector_limits_resolution() -> None:
-    assert "height<=1080" in build_format_selector(DownloadPreset.MP4_1080)
-    assert "height<=720" in build_format_selector(DownloadPreset.MP4_720)
+def test_build_format_selector_limits_resolution_and_requires_mp4() -> None:
+    best = build_format_selector(DownloadPreset.BEST_MP4)
+    at_1080 = build_format_selector(DownloadPreset.MP4_1080)
+    at_720 = build_format_selector(DownloadPreset.MP4_720)
+
+    assert "[ext=mp4]" in best
+    assert "height<=1080" in at_1080
+    assert "height<=720" in at_720
+    assert at_1080.endswith("[ext=mp4]")
+    assert at_720.endswith("[ext=mp4]")
     assert build_format_selector(DownloadPreset.MP3) == "bestaudio/best"
 
 

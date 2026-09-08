@@ -40,7 +40,6 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: object | None = None
         self._last_file: Path | None = None
-        self._inspected_url = ""
 
         self._build_ui()
         self._load_settings()
@@ -126,7 +125,7 @@ class MainWindow(QMainWindow):
         self.download_button.clicked.connect(self.start_download)
         self.cancel_button = QPushButton("取消")
         self.cancel_button.clicked.connect(self.cancel_download)
-        self.open_file_button = QPushButton("開啟影片")
+        self.open_file_button = QPushButton("開啟檔案")
         self.open_file_button.clicked.connect(self.open_last_file)
         self.open_folder_button = QPushButton("開啟資料夾")
         self.open_folder_button.clicked.connect(self.open_download_folder)
@@ -188,6 +187,8 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(self._inspect_succeeded)
         worker.failed.connect(self._operation_failed)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(self._clear_worker)
@@ -200,7 +201,6 @@ class MainWindow(QMainWindow):
         if not isinstance(info, MediaInfo):
             self._operation_failed("解析結果格式不正確。")
             return
-        self._inspected_url = self.url_edit.text().strip()
         self.platform_value.setText(info.platform_label)
         self.title_value.setText(info.title)
         self.duration_value.setText(format_duration(info.duration_seconds))
@@ -230,6 +230,7 @@ class MainWindow(QMainWindow):
             return
 
         self._save_settings()
+        self._backend.reset_cancel()
         preset = DownloadPreset(str(self.preset_combo.currentData()))
         self._set_busy_state("準備下載…", cancellable=True)
         self.progress_bar.setRange(0, 0)
@@ -242,6 +243,9 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._download_succeeded)
         worker.cancelled.connect(self._download_cancelled)
         worker.failed.connect(self._operation_failed)
+        worker.finished.connect(worker.deleteLater)
+        worker.cancelled.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
         worker.finished.connect(thread.quit)
         worker.cancelled.connect(thread.quit)
         worker.failed.connect(thread.quit)

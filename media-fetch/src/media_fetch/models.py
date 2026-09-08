@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class DownloadPreset(str, Enum):
+class DownloadPreset(StrEnum):
     BEST_MP4 = "best_mp4"
     MP4_1080 = "mp4_1080"
     MP4_720 = "mp4_720"

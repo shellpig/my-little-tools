@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -46,18 +48,13 @@ class MediaBackend:
         url = normalize_url(raw_url)
         download_dir = download_dir.expanduser().resolve()
         download_dir.mkdir(parents=True, exist_ok=True)
-        self.reset_cancel()
 
         yt_dlp = _import_yt_dlp()
         final_path: Path | None = None
 
         def progress_hook(data: dict[str, Any]) -> None:
-            nonlocal final_path
             if self._cancel_event.is_set():
                 raise DownloadCancelled("下載已取消。")
-            filename = data.get("filename")
-            if filename:
-                final_path = Path(str(filename))
             if progress_callback:
                 progress_callback(data)
 
@@ -119,11 +116,32 @@ class MediaBackend:
 
     @staticmethod
     def _base_options() -> dict[str, Any]:
-        return {
+        options: dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            "socket_timeout": 20,
+            "retries": 3,
         }
+        deno_path = _deno_location()
+        if deno_path is not None:
+            options["js_runtimes"] = {"deno": {"path": deno_path}}
+        return options
+
+
+def _deno_location() -> str | None:
+    """Find the Deno runtime used by yt-dlp's YouTube JS challenge solver."""
+    bundled_root = getattr(sys, "_MEIPASS", None)
+    if bundled_root:
+        bundled = Path(str(bundled_root)) / "deno.exe"
+        if bundled.is_file():
+            return str(bundled)
+
+    source_vendor = Path(__file__).resolve().parents[2] / "vendor" / "deno.exe"
+    if source_vendor.is_file():
+        return str(source_vendor)
+
+    return shutil.which("deno")
 
 
 def _ffmpeg_location() -> str:

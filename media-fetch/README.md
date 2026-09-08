@@ -1,7 +1,90 @@
 # MediaFetch
 
-MediaFetch is a small Windows desktop utility for downloading publicly accessible media from supported sites.
+MediaFetch 是 `my-little-tools` 裡的一個獨立 Windows 桌面小工具，用來下載你有權存取與保存的公開媒體。
 
-This directory is intentionally self-contained so `my-little-tools` can host multiple independent tools without mixing their source, tests, build files, or documentation.
+目前版本：**V0.1 開發版**
 
-> Initial repository bootstrap. Active V0.1 development happens on a feature branch.
+## V0.1 功能
+
+- 貼上影片 URL。
+- 解析來源、標題、長度與解析度。
+- 下載預設：
+  - MP4 最高畫質。
+  - MP4 1080p 以下。
+  - MP4 720p 以下。
+  - MP3 192 kbps。
+- 選擇並記住下載資料夾。
+- 顯示下載進度、速度與剩餘時間。
+- 取消下載。
+- 下載完成後開啟檔案或資料夾。
+- 下載核心使用 `yt-dlp`，FFmpeg 由 `imageio-ffmpeg` 提供。
+- YouTube 的 JavaScript challenge 支援使用 Deno；開發/打包腳本會準備固定版本的 Windows x64 Deno。
+
+目標網站包含 YouTube、Instagram、Facebook、X、TikTok；實際可下載內容仍取決於 `yt-dlp` 對網站當下版本的支援，以及內容是否需要登入、是否有地區限制或 DRM。
+
+## 使用限制
+
+MediaFetch 不提供 DRM 繞過，也不保證能下載私人、登入限定、付費或受平台技術保護的內容。請只下載你有權存取、保存與使用的內容，並遵守來源網站的條款與適用法律。
+
+## 開發環境
+
+- Windows 10 / 11
+- Python 3.11+
+- PySide6
+- yt-dlp（含 `yt-dlp-ejs`）
+- Deno 2.9.6（腳本自動下載並驗證 SHA-256）
+- imageio-ffmpeg
+
+### 執行開發版
+
+在 Windows PowerShell 5.1 或更新版本中：
+
+```powershell
+cd <repo>\media-fetch
+.\scripts\run.ps1
+```
+
+腳本會先準備 `vendor\deno.exe`，再建立 `.venv`、安裝相依套件並啟動 MediaFetch。Deno 壓縮檔會先驗證官方 release 的 SHA-256，`vendor/` 不會提交到 Git。
+
+## 測試
+
+```powershell
+cd <repo>\media-fetch
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check src tests
+```
+
+## 建立 Windows EXE
+
+```powershell
+cd <repo>\media-fetch
+.\scripts\build.ps1
+```
+
+成功後輸出：
+
+```text
+dist\MediaFetch.exe
+```
+
+`build.ps1` 會準備 Deno、跑單元測試與 Ruff static check，通過後才執行 PyInstaller，並把 Deno 與 FFmpeg 一起封裝到 `MediaFetch.exe`。目前打包目標為 Windows x64。
+
+## 目錄
+
+```text
+media-fetch/
+├─ src/media_fetch/        # 應用程式與 UI
+├─ tests/                  # 不連外的單元測試
+├─ scripts/                # Windows 執行 / 打包 / Deno 準備腳本
+├─ vendor/                 # 建置時產生，不進 Git
+├─ pyproject.toml
+└─ README.md
+```
+
+## V0.1 暫不處理
+
+- 播放清單 / 批次下載。
+- Cookies / 瀏覽器登入狀態匯入。
+- 字幕與縮圖下載。
+- yt-dlp 核心自動更新按鈕。
+- 應用程式自動更新。
