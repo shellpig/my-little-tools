@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, QThread, QUrl, Slot
+from PySide6.QtCore import QSettings, QThread, QTimer, QUrl, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..backend import MediaBackend
-from ..core import format_bytes, format_duration, normalize_url
+from ..core import InvalidMediaUrl, format_bytes, format_duration, normalize_url
 from ..models import COOKIE_BROWSERS, COOKIE_FILE_OPTION, DownloadPreset, MediaInfo
 from .workers import DownloadWorker, InspectWorker
 
@@ -40,6 +40,11 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: object | None = None
         self._last_file: Path | None = None
+        self._auto_inspected_url: str | None = None
+        self._auto_inspect_timer = QTimer(self)
+        self._auto_inspect_timer.setSingleShot(True)
+        self._auto_inspect_timer.setInterval(500)
+        self._auto_inspect_timer.timeout.connect(self.inspect_entered_url)
 
         self._build_ui()
         self._load_settings()
@@ -63,12 +68,13 @@ class MainWindow(QMainWindow):
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://www.youtube.com/watch?v=... 或其他支援網站")
         self.url_edit.returnPressed.connect(self.start_inspect)
-        self.paste_button = QPushButton("貼上")
-        self.paste_button.clicked.connect(self.paste_url)
+        self.url_edit.textChanged.connect(self.schedule_auto_inspect)
+        self.clear_button = QPushButton("清空")
+        self.clear_button.clicked.connect(self.clear_url)
         self.inspect_button = QPushButton("解析")
         self.inspect_button.clicked.connect(self.start_inspect)
         url_layout.addWidget(self.url_edit, 1)
-        url_layout.addWidget(self.paste_button)
+        url_layout.addWidget(self.clear_button)
         url_layout.addWidget(self.inspect_button)
         layout.addWidget(url_box)
 
@@ -214,11 +220,26 @@ class MainWindow(QMainWindow):
             self._save_settings()
 
     @Slot()
-    def paste_url(self) -> None:
-        from PySide6.QtWidgets import QApplication
-
-        self.url_edit.setText(QApplication.clipboard().text().strip())
+    def clear_url(self) -> None:
+        self._auto_inspected_url = None
+        self.url_edit.clear()
         self.url_edit.setFocus()
+
+    @Slot(str)
+    def schedule_auto_inspect(self, _text: str) -> None:
+        self._auto_inspect_timer.start()
+
+    @Slot()
+    def inspect_entered_url(self) -> None:
+        """Inspect once the box holds a URL, staying quiet for anything else."""
+        try:
+            url = normalize_url(self.url_edit.text())
+        except InvalidMediaUrl:
+            return
+        if url == self._auto_inspected_url:
+            return
+        self._auto_inspected_url = url
+        self.start_inspect()
 
     @Slot()
     def choose_directory(self) -> None:
@@ -414,7 +435,7 @@ class MainWindow(QMainWindow):
     def _set_busy_state(self, message: str, *, cancellable: bool) -> None:
         self.status_label.setText(message)
         self.url_edit.setEnabled(False)
-        self.paste_button.setEnabled(False)
+        self.clear_button.setEnabled(False)
         self.inspect_button.setEnabled(False)
         self.preset_combo.setEnabled(False)
         self.cookies_combo.setEnabled(False)
@@ -427,7 +448,7 @@ class MainWindow(QMainWindow):
 
     def _set_idle_state(self) -> None:
         self.url_edit.setEnabled(True)
-        self.paste_button.setEnabled(True)
+        self.clear_button.setEnabled(True)
         self.inspect_button.setEnabled(True)
         self.preset_combo.setEnabled(True)
         self.cookies_combo.setEnabled(True)
