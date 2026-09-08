@@ -6,7 +6,7 @@ MediaFetch 是 `my-little-tools` 裡的一個獨立 Windows 桌面小工具，�
 
 ## V0.1 功能
 
-- 貼上影片 URL。
+- 貼上影片 URL，貼上後自動解析；「清空」清掉網址欄。
 - 解析來源、標題、長度與解析度。
 - 下載預設：
   - MP4 最高畫質。
@@ -42,7 +42,7 @@ MediaFetch 不提供 DRM 繞過，也不保證能下載私人、登入限定、�
 
 - Windows 10 / 11
 - Python 3.11+
-- PySide6
+- PySide6-Essentials
 - yt-dlp（含 `yt-dlp-ejs`）
 - Deno 2.9.6（腳本自動下載並驗證 SHA-256）
 - imageio-ffmpeg
@@ -79,6 +79,8 @@ cd <repo>\media-fetch
 dist\MediaFetch.exe
 ```
 
+打包後可直接執行 `MediaFetch.cmd` 啟動，它會找同層 `dist\MediaFetch.exe`，所以整個 `media-fetch` 目錄搬到任何位置都能用。
+
 `build.ps1` 會準備 Deno、跑單元測試與 Ruff static check，通過後才執行 PyInstaller，並把 Deno 與 FFmpeg 一起封裝到 `MediaFetch.exe`。目前打包目標為 Windows x64。
 
 ## 目錄
@@ -89,6 +91,8 @@ media-fetch/
 ├─ tests/                  # 不連外的單元測試
 ├─ scripts/                # Windows 執行 / 打包 / Deno 準備腳本
 ├─ vendor/                 # 建置時產生，不進 Git
+├─ dist/                   # 打包產出，不進 Git
+├─ MediaFetch.cmd          # 啟動已打包的 MediaFetch.exe
 ├─ pyproject.toml
 └─ README.md
 ```
