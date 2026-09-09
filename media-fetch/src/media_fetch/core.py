@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from .models import COOKIE_BROWSERS, DownloadPreset, MediaInfo
 
@@ -14,11 +15,28 @@ class InvalidCookieFile(ValueError):
     pass
 
 
+X_HOSTS: frozenset[str] = frozenset(
+    {
+        "x.com",
+        "www.x.com",
+        "twitter.com",
+        "www.twitter.com",
+        "mobile.twitter.com",
+    }
+)
+
+_X_MEDIA_INDEX = re.compile(r"/(?:photo|video)/\d+/?$")
+
+
 def normalize_url(raw_url: str) -> str:
     url = raw_url.strip()
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise InvalidMediaUrl("請輸入有效的 http(s) 影片網址。")
+    if parsed.netloc.lower() in X_HOSTS:
+        path = _X_MEDIA_INDEX.sub("", parsed.path)
+        if path != parsed.path:
+            return urlunparse(parsed._replace(path=path))
     return url
 
 

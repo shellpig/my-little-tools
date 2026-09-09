@@ -27,6 +27,43 @@ def test_normalize_url_rejects_invalid_values(value: str) -> None:
         normalize_url(value)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            "https://x.com/user/status/123/photo/1",
+            "https://x.com/user/status/123",
+        ),
+        (
+            "https://x.com/user/status/123/video/2/",
+            "https://x.com/user/status/123",
+        ),
+        (
+            "https://twitter.com/user/status/123/photo/1",
+            "https://twitter.com/user/status/123",
+        ),
+        (
+            "https://x.com/user/status/123/photo/1?s=20",
+            "https://x.com/user/status/123?s=20",
+        ),
+    ],
+)
+def test_normalize_url_drops_x_media_index(value: str, expected: str) -> None:
+    """A /photo/N suffix pins yt-dlp to one media item, which fails on photo-first tweets."""
+    assert normalize_url(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://x.com/user/status/123",
+        "https://example.com/album/photo/1",
+    ],
+)
+def test_normalize_url_keeps_other_paths(value: str) -> None:
+    assert normalize_url(value) == value
+
+
 def test_format_duration() -> None:
     assert format_duration(65) == "1:05"
     assert format_duration(3661) == "1:01:01"
