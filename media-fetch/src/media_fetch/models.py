@@ -42,6 +42,8 @@ class MediaInfo:
             return "X"
         if "tiktok" in key:
             return "TikTok"
+        if "threads" in key:
+            return "Threads"
         return self.extractor or "未知網站"
 
     @property

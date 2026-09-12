@@ -89,6 +89,12 @@ def test_build_format_selector_limits_resolution_and_requires_mp4() -> None:
     assert build_format_selector(DownloadPreset.MP3) == "bestaudio/best"
 
 
+def test_build_format_selector_single_quality_collapses_mp4_presets() -> None:
+    for preset in (DownloadPreset.BEST_MP4, DownloadPreset.MP4_1080, DownloadPreset.MP4_720):
+        assert build_format_selector(preset, single_quality=True) == "best"
+    assert build_format_selector(DownloadPreset.MP3, single_quality=True) == "bestaudio/best"
+
+
 def test_output_template_is_inside_requested_directory(tmp_path: Path) -> None:
     template = build_output_template(tmp_path)
     assert str(tmp_path) in template

@@ -65,7 +65,14 @@ def format_bytes(value: int | float | None) -> str:
     return ""
 
 
-def build_format_selector(preset: DownloadPreset) -> str:
+def build_format_selector(preset: DownloadPreset, single_quality: bool = False) -> str:
+    """Build yt-dlp's format string.
+
+    `single_quality` is for sources that expose one progressive MP4 with no
+    resolution metadata; every MP4 preset then falls back to that file.
+    """
+    if single_quality and preset is not DownloadPreset.MP3:
+        return "best"
     if preset is DownloadPreset.BEST_MP4:
         return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
     if preset is DownloadPreset.MP4_1080:

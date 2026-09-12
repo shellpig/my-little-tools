@@ -13,6 +13,7 @@ def test_platform_labels_cover_v01_targets() -> None:
         "Facebook": "Facebook",
         "Twitter": "X",
         "TikTok": "TikTok",
+        "Threads": "Threads",
     }
     for extractor, expected in cases.items():
         info = MediaInfo("x", extractor, None, None, None, "")

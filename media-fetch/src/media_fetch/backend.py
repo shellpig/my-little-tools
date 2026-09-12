@@ -16,6 +16,7 @@ from .core import (
     resolve_cookie_file,
 )
 from .models import DownloadPreset, MediaInfo
+from .threads import fetch_threads_info, is_threads_url
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -43,6 +44,8 @@ class MediaBackend:
         cookies_file: str | None = None,
     ) -> MediaInfo:
         url = normalize_url(raw_url)
+        if is_threads_url(url):
+            return media_info_from_ydl(fetch_threads_info(url))
         yt_dlp = _import_yt_dlp()
         with yt_dlp.YoutubeDL(self._base_options(cookies_browser, cookies_file)) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -72,10 +75,11 @@ class MediaBackend:
             if progress_callback:
                 progress_callback(data)
 
+        threads_info = fetch_threads_info(url) if is_threads_url(url) else None
         options = self._base_options(cookies_browser, cookies_file)
         options.update(
             {
-                "format": build_format_selector(preset),
+                "format": build_format_selector(preset, single_quality=threads_info is not None),
                 "outtmpl": build_output_template(download_dir),
                 "windowsfilenames": True,
                 "continuedl": True,
@@ -99,7 +103,10 @@ class MediaBackend:
 
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
+                if threads_info is not None:
+                    info = ydl.process_ie_result(threads_info, download=True)
+                else:
+                    info = ydl.extract_info(url, download=True)
                 if self._cancel_event.is_set():
                     raise DownloadCancelled("下載已取消。")
                 if isinstance(info, dict):
