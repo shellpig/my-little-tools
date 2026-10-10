@@ -689,13 +689,8 @@ async function buildTown() {
   box(120, 0.1, 120, std(0x667a52), 0, -0.05, 0);
   Object.assign(kit, { pavement: std(0xb3ada3), curb: std(0xd2ccc0) });
   paveSidewalks();
-  const jobs = [];
-  for (const street of STREETS) {
-    // Road tiles are 1 × 1; stretch them across to the two-lane width.
-    for (let x = -20; x <= 20; x++) {
-      jobs.push(place('roads', 'road-straight', { x, z: street, scale: [1, 1, ROAD_HALF * 2], mat: roadMat }));
-    }
-  }
+  // The streets' road surface is drawn with the painted roads.
+  const jobs = [drawTiles()];
   buildAlleys();
 
   // The hotel in the middle; the bus stop is outside the convenience store.
@@ -2797,6 +2792,7 @@ renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preven
 // Cells inside a street can't be painted; the back street sits half a cell
 // off the grid, so the cells beside it overlap it and stop at its edge.
 const CELL = ROAD_HALF * 2;
+const STREET_END = 20.5;
 const tiles = new Map(); // "i,j" → 'road' | 'walk'
 const tileGroup = new THREE.Group();
 const kerbs = new THREE.Group();
@@ -2870,6 +2866,38 @@ async function drawTiles() {
       obj.scale.setScalar(CELL);
     }
     tileGroup.add(obj);
+  }
+
+  // The streets: straight between junctions, and a T (or a crossing, with
+  // roads on both sides) where painted roads join them.
+  for (const street of STREETS) {
+    const joins = new Map(); // cell column → sides with a road
+    for (const [key, kind] of tiles) {
+      if (kind !== 'road') continue;
+      const [i, j] = key.split(',').map(Number);
+      const z = j * CELL;
+      if (z < street && Math.abs(z + ROAD_HALF - street) <= ROAD_HALF + 1e-6) joins.set(i, (joins.get(i) ?? 0) | NORTH);
+      if (z > street && Math.abs(z - ROAD_HALF - street) <= ROAD_HALF + 1e-6) joins.set(i, (joins.get(i) ?? 0) | SOUTH);
+    }
+    const straight = (a, b) => {
+      const obj = roadPiece(gltfs['road-straight']);
+      obj.position.set((a + b) / 2, 0, street);
+      obj.scale.set(b - a, 1, CELL);
+      tileGroup.add(obj);
+    };
+    let from = -STREET_END;
+    for (const i of [...joins.keys()].sort((a, b) => a - b)) {
+      const a = i * CELL - ROAD_HALF;
+      if (a > from) straight(from, a);
+      const [piece, k] = pieceFor.get(EAST | WEST | joins.get(i));
+      const obj = roadPiece(gltfs[piece]);
+      obj.position.set(i * CELL, 0, street);
+      obj.rotation.y = k * Math.PI / 2;
+      obj.scale.setScalar(CELL);
+      tileGroup.add(obj);
+      from = a + CELL;
+    }
+    if (from < STREET_END) straight(from, STREET_END);
   }
 }
 
