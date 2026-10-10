@@ -141,6 +141,17 @@ resize();
 const glowing = [];
 const lamps = [];
 
+// What the player can walk into: footprints (boxes in x/z) and round posts.
+const solids = [];
+const posts = [];
+const solid = (x, z, hw, hd) => solids.push({ minX: x - hw, maxX: x + hw, minZ: z - hd, maxZ: z + hd });
+const post = (x, z, r) => posts.push({ x, z, r });
+function solidOf(obj) {
+  const b = new THREE.Box3().setFromObject(obj);
+  solids.push({ minX: b.min.x + 0.02, maxX: b.max.x - 0.02, minZ: b.min.z + 0.02, maxZ: b.max.z - 0.02 });
+  return obj;
+}
+
 const std = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, ...opts });
 
 function box(w, h, d, mat, x, y, z, cast = false, parent = scene) {
@@ -288,7 +299,7 @@ function alignFront(obj, front = MAIN_NORTH.front, facing = 1) {
 // A building in a row, turned to face its street and set on the frontage.
 function building(pack, name, x, row, mat) {
   return place(pack, name, { x, rot: row.facing > 0 ? 0 : Math.PI, mat })
-    .then(obj => alignFront(obj, row.front, row.facing));
+    .then(obj => solidOf(alignFront(obj, row.front, row.facing)));
 }
 
 // ---------- shops ----------
@@ -413,7 +424,10 @@ function decorateHotel(building) {
   glowing.push([downlight, 2.5]);
   box(0.74, 0.025, 0.34, canopy, 0, 0.36, front + 0.17, true);
   box(0.6, 0.006, 0.26, downlight, 0, 0.345, front + 0.17);
-  for (const x of [-0.34, 0.34]) box(0.02, 0.31, 0.02, canopy, x, 0.2, front + 0.32, true);
+  for (const x of [-0.34, 0.34]) {
+    box(0.02, 0.31, 0.02, canopy, x, 0.2, front + 0.32, true);
+    post(x, front + 0.32, 0.03);
+  }
   box(0.3, 0.004, 0.3, std(0x9e2b2b), 0, 0.052, front + 0.15);
 }
 
@@ -432,6 +446,8 @@ function buildBusStop() {
   box(0.5, 0.005, 0.06, roofLight, SHELTER_X, 0.344, SHELTER_Z);
   box(0.42, 0.012, 0.06, std(0x8a5a3a), SHELTER_X, 0.1, SHELTER_Z - 0.03, true);
   for (const dx of [-0.18, 0.18]) box(0.012, 0.05, 0.05, frame, SHELTER_X + dx, 0.075, SHELTER_Z - 0.03);
+  solid(SHELTER_X, SHELTER_Z - 0.02, 0.33, 0.1);
+  post(SHELTER_X - 0.42, -ROAD_HALF - 0.08, 0.03);
 
   // Stop sign on a pole at the curb.
   const tex = signTexture('公車站', '#1f6fb2', '#ffffff');
@@ -487,11 +503,13 @@ function bench(x, z, rotation) {
   g.position.set(x, 0.02, z);
   g.rotation.y = rotation;
   scene.add(g);
+  post(x, z, 0.15);
 }
 
 function parkLamp(x, z, bulbMat) {
   const iron = std(0x2c2f35, { roughness: 0.5, metalness: 0.5 });
   cylinder(0.012, 0.016, 0.34, iron, x, 0.19, z, 8);
+  post(x, z, 0.03);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8), bulbMat);
   head.position.set(x, 0.37, z);
   scene.add(head);
@@ -542,6 +560,7 @@ function buildPark(jobs, plantMat) {
   fountain.hit.position.set(0, 0.25, cz);
   fountain.hit.userData.fountain = true;
   scene.add(fountain.hit);
+  post(0, cz, 0.6);
 
   for (let i = 0; i < benchSeats.length; i += 2) {
     const { x, z, rotation } = benchSeats[i].bench;
@@ -573,18 +592,31 @@ function buildPark(jobs, plantMat) {
   // Fence round the lawn, with gaps for the entrance and the side gates.
   const fenceMat = std(0xefebe2, { roughness: 0.8 });
   for (let x = -xHalf + 0.24; x < xHalf; x += 0.48) {
-    if (Math.abs(x) > 0.4) jobs.push(place('suburban', 'fence', { x, z: zMin, mat: fenceMat }));
+    if (Math.abs(x) > 0.4) {
+      jobs.push(place('suburban', 'fence', { x, z: zMin, mat: fenceMat }));
+      solid(x, zMin, 0.24, 0.05);
+    }
     jobs.push(place('suburban', 'fence', { x, z: zMax, mat: fenceMat }));
+    solid(x, zMax, 0.24, 0.05);
   }
   for (let z = zMin + 0.24; z < zMax; z += 0.48) {
     if (Math.abs(z - cz) < 0.3) continue;
-    for (const side of [-1, 1]) jobs.push(place('suburban', 'fence', { x: side * xHalf, z, rot: Math.PI / 2, mat: fenceMat }));
+    for (const side of [-1, 1]) {
+      jobs.push(place('suburban', 'fence', { x: side * xHalf, z, rot: Math.PI / 2, mat: fenceMat }));
+      solid(side * xHalf, z, 0.05, 0.24);
+    }
   }
-  for (const x of [-0.62, 0.62]) jobs.push(place('suburban', 'planter', { x, z: zMin - 0.12, mat: plantMat }));
+  for (const x of [-0.62, 0.62]) {
+    jobs.push(place('suburban', 'planter', { x, z: zMin - 0.12, mat: plantMat }));
+    solid(x, zMin - 0.12, 0.2, 0.15);
+  }
 
   // Trees: dense inside the park away from the paths, sparser outside it.
-  const tree = (x, z) => jobs.push(place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
-    { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }));
+  const tree = (x, z) => {
+    post(x, z, 0.1);
+    jobs.push(place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
+      { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }));
+  };
   for (let placed = 0; placed < 26;) {
     const x = (rand() * 2 - 1) * (xHalf - 0.25);
     const z = zMin + 0.25 + rand() * (zMax - zMin - 0.5);
@@ -631,7 +663,7 @@ async function buildTown() {
   buildAlleys();
 
   // The hotel in the middle; the bus stop is outside the convenience store.
-  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => decorateHotel(alignFront(obj))));
+  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => decorateHotel(solidOf(alignFront(obj)))));
   buildBusStop();
 
   // Shops and public buildings, each with a sign and the shops with awnings.
@@ -673,6 +705,7 @@ async function buildTown() {
     for (const [x, side] of spots) {
       const z = street + side * (ROAD_HALF + 0.12);
       jobs.push(place('roads', 'light-square', { x, z, rot: side < 0 ? Math.PI : 0, mat: roadMat }));
+      post(x, z, 0.04);
       const head = new THREE.Vector3(x, 0.57, z - side * 0.19);
       box(0.06, 0.015, 0.06, bulbMat, head.x, head.y, head.z);
       const light = new THREE.PointLight(0xffbe7a, 0, 3.2, 1.6);
@@ -720,6 +753,7 @@ const asphalt = () => std(0x3a3d44, { roughness: 0.95 });
 function poleSign(text, bg, fg, x, z, glow) {
   const grey = std(0x8a8f99, { roughness: 0.5, metalness: 0.4 });
   cylinder(0.02, 0.02, 0.6, grey, x, 0.3, z, 8);
+  post(x, z, 0.04);
   const tex = signTexture(text, bg, fg);
   const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, roughness: 0.5 });
   glowing.push([mat, glow]);
@@ -741,15 +775,22 @@ function buildGasStation() {
   box(2.0, 0.07, 1.1, white, cx, 0.5, z, true);
   box(2.02, 0.035, 1.12, red, cx, 0.47, z);
   box(1.7, 0.006, 0.8, light, cx, 0.45, z);
-  for (const dx of [-0.85, 0.85]) for (const dz of [-0.4, 0.4]) box(0.04, 0.45, 0.04, grey, cx + dx, 0.225, z + dz, true);
+  for (const dx of [-0.85, 0.85]) {
+    for (const dz of [-0.4, 0.4]) {
+      box(0.04, 0.45, 0.04, grey, cx + dx, 0.225, z + dz, true);
+      post(cx + dx, z + dz, 0.04);
+    }
+  }
   for (const dx of [-0.4, 0.4]) {
     box(0.22, 0.03, 0.14, grey, cx + dx, 0.015, z);
     box(0.12, 0.22, 0.1, red, cx + dx, 0.14, z, true);
+    solid(cx + dx, z, 0.11, 0.07);
     box(0.08, 0.05, 0.005, light, cx + dx, 0.2, z - 0.053);
   }
 
   // Kiosk at the back, its window toward the street.
   box(0.9, 0.36, 0.55, white, x - 1.1, 0.18, z + 0.7, true);
+  solid(x - 1.1, z + 0.7, 0.45, 0.275);
   box(0.6, 0.18, 0.006, light, x - 1.1, 0.17, z + 0.42);
   poleSign('加油站', '#d2352b', '#ffffff', x + 1.5, MAIN_SOUTH.front + 0.15, 0.7);
 
@@ -1328,6 +1369,7 @@ async function addTraffic() {
     group.position.set(stall.x, 0.012, stall.z);
     group.rotation.y = stall.rot;
     scene.add(group);
+    solid(stall.x, stall.z, 0.16, 0.27);
   });
 }
 
@@ -1343,6 +1385,11 @@ function updateTraffic(dt, activity) {
       if (ahead) {
         const gap = (ahead.x - v.x) * lane.dir - (ahead.length + v.length) / 2;
         target = Math.min(target, Math.max(0, (gap - 0.15) * 1.2));
+      }
+      // Brake for the player standing in the lane ahead.
+      if (player.active && Math.abs(player.pos.z - lane.z) < 0.38) {
+        const gap = (player.pos.x - v.x) * lane.dir - v.length / 2 - 0.12;
+        if (gap > -v.length / 2) target = Math.min(target, Math.max(0, gap * 1.5));
       }
       v.speed += THREE.MathUtils.clamp(target - v.speed, -1.5 * dt, 0.5 * dt);
       v.x += v.speed * lane.dir * dt;
@@ -1822,6 +1869,241 @@ function updateTalk(dt) {
   bubble.style.top = `${(1 - head.y) / 2 * innerHeight}px`;
 }
 
+// ---------- playing a townsperson ----------
+
+// Walk the town as one of the townspeople. The camera keeps following
+// from behind and above and can still be turned and zoomed; movement is
+// relative to where it looks. Touch screens get a stick and an action button.
+const PLAYER_KEY = 'small-town:player';
+const PLAYER_R = 0.09;
+const WALK = 0.55;
+const RUN = 1.25;
+const BOUNDS = { minX: -12.5, maxX: 12.5, minZ: BACK_NORTH.front - 2.8, maxZ: PARK.zMax + 3 };
+const player = { active: false, look: 'male-f', pos: new THREE.Vector3(0.6, 0, MAIN_SOUTH.front - 0.35), obj: null };
+try { player.look = JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}').look ?? player.look; } catch { /* storage unavailable */ }
+const keys = new Set();
+const stick = { x: 0, y: 0 };
+const overview = { pos: camera.position.clone(), target: controls.target.clone() };
+
+// Road, sidewalks and park paths sit a little above the grass.
+function groundHeight(x, z) {
+  for (const street of STREETS) {
+    const d = Math.abs(z - street);
+    if (d < ROAD_HALF) return 0.02;
+    if (d < FRONTAGE) return 0.05;
+  }
+  return Math.abs(x) < PARK.xHalf && z > PARK.zMin && z < PARK.zMax ? 0.02 : 0;
+}
+
+// Push the player's circle out of every footprint and post, then keep it in town.
+function collide(p) {
+  for (let pass = 0; pass < 2; pass++) {
+    for (const s of solids) {
+      const cx = THREE.MathUtils.clamp(p.x, s.minX, s.maxX);
+      const cz = THREE.MathUtils.clamp(p.z, s.minZ, s.maxZ);
+      const dx = p.x - cx;
+      const dz = p.z - cz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= PLAYER_R * PLAYER_R) continue;
+      if (d2 > 1e-8) {
+        const d = Math.sqrt(d2);
+        p.x = cx + dx / d * PLAYER_R;
+        p.z = cz + dz / d * PLAYER_R;
+      } else {
+        // Inside the box: leave by the nearest side.
+        const out = [[s.minX - PLAYER_R - p.x, 0], [s.maxX + PLAYER_R - p.x, 0], [0, s.minZ - PLAYER_R - p.z], [0, s.maxZ + PLAYER_R - p.z]]
+          .sort((a, b) => Math.abs(a[0] + a[1]) - Math.abs(b[0] + b[1]))[0];
+        p.x += out[0];
+        p.z += out[1];
+      }
+    }
+    for (const c of posts) {
+      const dx = p.x - c.x;
+      const dz = p.z - c.z;
+      const d = Math.hypot(dx, dz);
+      const min = c.r + PLAYER_R;
+      if (d >= min) continue;
+      const k = d > 1e-6 ? min / d : 0;
+      p.x = d > 1e-6 ? c.x + dx * k : c.x + min;
+      p.z = d > 1e-6 ? c.z + dz * k : c.z;
+    }
+  }
+  p.x = THREE.MathUtils.clamp(p.x, BOUNDS.minX, BOUNDS.maxX);
+  p.z = THREE.MathUtils.clamp(p.z, BOUNDS.minZ, BOUNDS.maxZ);
+}
+
+function dressPlayer() {
+  if (player.obj) scene.remove(player.obj);
+  const gltf = peopleGltfs[PEOPLE.indexOf(`character-${player.look}`)];
+  const obj = SkeletonUtils.clone(gltf.scene);
+  obj.scale.setScalar(PERSON_SCALE);
+  obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  obj.position.copy(player.pos);
+  obj.rotation.y = player.obj?.rotation.y ?? Math.PI;
+  scene.add(obj);
+  const mixer = new THREE.AnimationMixer(obj);
+  const clip = name => mixer.clipAction(THREE.AnimationClip.findByName(gltf.animations, name));
+  Object.assign(player, { obj, mixer, moves: { idle: clip('idle'), walk: clip('walk'), sprint: clip('sprint') }, move: 'idle' });
+  player.moves.idle.play();
+}
+
+function setMove(move) {
+  if (move === player.move) return;
+  player.moves[player.move].fadeOut(0.2);
+  player.moves[move].reset().fadeIn(0.2).play();
+  player.move = move;
+}
+
+function togglePlay() {
+  player.active = !player.active;
+  document.body.classList.toggle('playing', player.active);
+  $('play').textContent = player.active ? '回到俯瞰（P）' : '🚶 散步模式（P）';
+  if (player.active) {
+    player.pos.y = groundHeight(player.pos.x, player.pos.z);
+    dressPlayer();
+    controls.target.copy(player.pos).y += 0.15;
+    camera.position.copy(controls.target).add(new THREE.Vector3(0, 0.9, 1.8));
+    Object.assign(controls, { minDistance: 0.6, maxDistance: 10, maxPolarAngle: 1.45 });
+    if (matchMedia('(pointer: coarse)').matches) setCollapsed(true);
+  } else {
+    scene.remove(player.obj);
+    player.obj = null;
+    camera.position.copy(overview.pos);
+    controls.target.copy(overview.target);
+    Object.assign(controls, { minDistance: 3, maxDistance: 35, maxPolarAngle: 1.32 });
+    $('prompt').hidden = true;
+  }
+}
+
+function changeLook(step = 1) {
+  const looks = PEOPLE.map(n => n.replace('character-', ''));
+  player.look = looks[(looks.indexOf(player.look) + step + looks.length) % looks.length];
+  try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ look: player.look })); } catch { /* storage unavailable */ }
+  if (player.active) dressPlayer();
+}
+
+// Whoever or whatever is close enough to use: people and cats within reach
+// (cats on roofs only from the roof), or the fountain's rim.
+function nearby() {
+  const p = player.pos;
+  let best = null;
+  let bestD = 0.55;
+  for (const w of walkers) {
+    if (!w.obj.visible) continue;
+    const d = Math.hypot(w.obj.position.x - p.x, w.obj.position.z - p.z);
+    if (d < bestD) [best, bestD] = [{ kind: 'person', it: w }, d];
+  }
+  for (const c of cats) {
+    if (c.poof || Math.abs(c.obj.position.y - p.y) > 0.3) continue;
+    const d = Math.hypot(c.obj.position.x - p.x, c.obj.position.z - p.z);
+    if (d < bestD) [best, bestD] = [{ kind: 'cat', it: c }, d];
+  }
+  if (!best && Math.hypot(p.x, p.z - PARK.cz) < 0.62 + 0.35) best = { kind: 'fountain' };
+  return best;
+}
+
+function promptFor(target) {
+  if (!target) return '';
+  if (target.kind === 'fountain') return '投硬幣許願';
+  if (target.kind === 'cat') return '這裡有一隻貓！';
+  return `跟${target.it.info?.name ?? '路人'}說話`;
+}
+
+function interact() {
+  const target = nearby();
+  if (!target) return;
+  if (target.kind === 'fountain') {
+    if (!wishes.flying()) wishes.throwCoin(wishResult);
+    return;
+  }
+  const it = target.it;
+  if (target.kind === 'cat') {
+    findCat(it);
+    const v = it.obj.position.clone().project(camera);
+    hearts((v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight);
+  } else {
+    it.hop = HOP;
+  }
+  talk(it, it.speech());
+}
+
+const MOVE_KEYS = { KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1], KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0] };
+addEventListener('keydown', e => {
+  if (e.code === 'KeyP') togglePlay();
+  if (!player.active) return;
+  if (MOVE_KEYS[e.code] || e.code.startsWith('Shift')) {
+    keys.add(e.code);
+    if (e.code.startsWith('Arrow')) e.preventDefault();
+  }
+  if (e.code === 'KeyE' && !e.repeat) interact();
+  if (e.code === 'KeyC' && !e.repeat) changeLook();
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+$('play').addEventListener('click', e => { togglePlay(); e.currentTarget.blur(); });
+$('act').addEventListener('click', interact);
+
+// The touch stick: drag the knob; pushed all the way out it runs.
+const stickEl = $('stick');
+const knob = stickEl.querySelector('.knob');
+const STICK_R = 46;
+function moveStick(e) {
+  const r = stickEl.getBoundingClientRect();
+  let dx = e.clientX - (r.left + r.width / 2);
+  let dy = e.clientY - (r.top + r.height / 2);
+  const d = Math.hypot(dx, dy);
+  if (d > STICK_R) [dx, dy] = [dx / d * STICK_R, dy / d * STICK_R];
+  knob.style.transform = `translate(${dx}px, ${dy}px)`;
+  [stick.x, stick.y] = [dx / STICK_R, dy / STICK_R];
+}
+stickEl.addEventListener('pointerdown', e => { stickEl.setPointerCapture(e.pointerId); moveStick(e); });
+stickEl.addEventListener('pointermove', e => { if (stickEl.hasPointerCapture(e.pointerId)) moveStick(e); });
+const releaseStick = () => { knob.style.transform = ''; stick.x = stick.y = 0; };
+stickEl.addEventListener('pointerup', releaseStick);
+stickEl.addEventListener('pointercancel', releaseStick);
+
+const forward = new THREE.Vector3();
+function updatePlayer(dt) {
+  if (!player.active) return;
+  let ix = stick.x;
+  let iz = -stick.y;
+  for (const code of keys) {
+    const k = MOVE_KEYS[code];
+    if (k) [ix, iz] = [ix + k[0], iz + k[1]];
+  }
+  const amount = Math.min(1, Math.hypot(ix, iz));
+  const running = [...keys].some(c => c.startsWith('Shift')) || Math.hypot(stick.x, stick.y) > 0.92;
+  const before = player.pos.clone();
+  if (amount > 0.1) {
+    // W heads where the camera looks, flattened onto the ground.
+    camera.getWorldDirection(forward).setY(0).normalize();
+    const dx = forward.x * iz - forward.z * ix;
+    const dz = forward.z * iz + forward.x * ix;
+    const len = Math.hypot(dx, dz);
+    const step = (running ? RUN : WALK) * amount * dt;
+    player.pos.x += dx / len * step;
+    player.pos.z += dz / len * step;
+    collide(player.pos);
+    player.obj.rotation.y = Math.atan2(dx, dz);
+    setMove(running ? 'sprint' : 'walk');
+  } else {
+    setMove('idle');
+  }
+  player.pos.y = groundHeight(player.pos.x, player.pos.z);
+  player.obj.position.copy(player.pos);
+  player.mixer.update(dt);
+  // The camera rides along by however far the player moved.
+  const moved = player.pos.clone().sub(before);
+  camera.position.add(moved);
+  controls.target.add(moved);
+
+  const label = promptFor(nearby());
+  $('prompt').hidden = !label;
+  $('prompt').textContent = `E　${label}`;
+  $('act').textContent = label || '互動';
+  $('act').disabled = !label;
+}
+
 // ---------- main loop ----------
 
 const clock = new THREE.Clock();
@@ -1835,6 +2117,7 @@ function frame() {
   updateTraffic(dt, a);
   updateCats(dt);
   wishes.update(dt);
+  updatePlayer(dt);
   updateTalk(dt);
   controls.update();
   updateUI();

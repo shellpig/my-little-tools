@@ -70,6 +70,26 @@
     20% { opacity: 1; transform: translate(-50%, -20px) scale(1.15); }
     to { opacity: 0; transform: translate(calc(-50% + var(--drift)), -110px) scale(.9); }
   }
+  .play { position: fixed; left: 28px; top: 112px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--panel); color: var(--text); font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+    backdrop-filter: blur(12px); }
+  .play:hover { background: rgba(40, 46, 62, .85); }
+  body.playing .play { background: #f3f5f9; color: #111; }
+  .prompt { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px;
+    background: rgba(16, 20, 30, .8); color: var(--text); font-size: 14px; pointer-events: none; }
+  .stick, .act { display: none; }
+  .stick { position: fixed; left: 24px; bottom: 24px; width: 120px; height: 120px; border-radius: 50%; touch-action: none;
+    place-items: center; background: rgba(255, 255, 255, .12); border: 2px solid rgba(255, 255, 255, .25); }
+  .stick .knob { width: 52px; height: 52px; border-radius: 50%; background: rgba(255, 255, 255, .85);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .3); pointer-events: none; }
+  .act { position: fixed; right: 20px; bottom: 96px; min-width: 92px; padding: 14px 16px; border: 0; border-radius: 999px;
+    background: var(--accent); color: #1d2230; font-family: inherit; font-size: 15px; font-weight: 800; touch-action: manipulation; }
+  .act:disabled { opacity: .45; }
+  @media (pointer: coarse) {
+    body.playing .stick { display: grid; }
+    body.playing .act { display: block; }
+    body.playing .prompt { display: none; }
+  }
   #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 15px; color: var(--dim);
     background: #0b1020; transition: opacity .6s; }
   #loading.done { opacity: 0; pointer-events: none; }
@@ -79,6 +99,8 @@
     .title { left: 16px; top: 14px; }
     .title h1 { font-size: 30px; }
     .cats { top: auto; bottom: 96px; right: 12px; width: 200px; }
+    .play { left: 16px; top: 100px; }
+    body.playing .cats { display: none; }
   }
 </style>
 <script type="importmap">
@@ -115,7 +137,7 @@
     <button data-time="18.2">黃昏</button>
     <button data-time="21">夜晚</button>
   </div>
-  <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘</div>
+  <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘<br>散步模式：WASD 走、Shift 跑、E 互動、C 換角色、P 離開</div>
   </div>
 </div>
 
@@ -126,6 +148,11 @@
   <div class="cats-row wishes" id="wish-row"></div>
   <div class="cats-total" id="cat-total"></div>
 </div>
+
+<button id="play" class="play">🚶 散步模式（P）</button>
+<div id="prompt" class="prompt" hidden></div>
+<div id="stick" class="stick"><div class="knob"></div></div>
+<button id="act" class="act" disabled>互動</button>
 
 <div id="banner" class="banner"></div>
 
