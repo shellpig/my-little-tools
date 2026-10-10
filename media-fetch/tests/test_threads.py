@@ -122,3 +122,38 @@ def test_parse_threads_info_rejects_photo_only_post() -> None:
 def test_parse_threads_info_rejects_missing_post() -> None:
     with pytest.raises(ThreadsPostNotFound, match="找不到"):
         parse_threads_info(_page(_video_post(code="OTHER")), "AbC123-_x", POST_URL)
+
+
+def test_parse_threads_info_uses_linked_inline_media() -> None:
+    post = _video_post(
+        video_versions=[],
+        text_post_app_info={
+            "linked_inline_media": _video_post(code="Linked", pk="222", user={"username": "author"})
+        },
+    )
+    info = parse_threads_info(_page(post), "AbC123-_x", POST_URL)
+
+    assert info["id"] == "222"
+    assert info["uploader"] == "author"
+
+
+def test_parse_threads_info_uses_reposted_post() -> None:
+    post = _video_post(
+        video_versions=[],
+        text_post_app_info={
+            "share_info": {"reposted_post": _video_post(code="Reposted", pk="333")}
+        },
+    )
+    info = parse_threads_info(_page(post), "AbC123-_x", POST_URL)
+
+    assert info["id"] == "333"
+
+
+def test_parse_threads_info_uses_quoted_post() -> None:
+    post = _video_post(
+        video_versions=[],
+        text_post_app_info={"share_info": {"quoted_post": _video_post(code="Quoted", pk="444")}},
+    )
+    info = parse_threads_info(_page(post), "AbC123-_x", POST_URL)
+
+    assert info["id"] == "444"

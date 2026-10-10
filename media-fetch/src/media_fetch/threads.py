@@ -72,14 +72,14 @@ def parse_threads_info(html: str, code: str, webpage_url: str) -> dict[str, Any]
     post = _find_post(html, code)
     if post is None:
         raise ThreadsPostNotFound("找不到這則 Threads 貼文，它可能需要登入或已被刪除。")
-    media = _first_video_item(post)
+    source, media = _find_video(post)
     if media is None:
         raise ThreadsPostNotFound("這則 Threads 貼文沒有影片。")
     versions = media["video_versions"]
-    caption = (post.get("caption") or {}).get("text")
-    user = (post.get("user") or {}).get("username")
+    caption = (source.get("caption") or {}).get("text")
+    user = (source.get("user") or {}).get("username")
     return {
-        "id": str(media.get("pk") or post.get("pk") or code),
+        "id": str(media.get("pk") or source.get("pk") or code),
         "title": str(caption or f"Threads 貼文 {code}"),
         "uploader": user,
         "webpage_url": webpage_url,
@@ -133,6 +133,30 @@ def _walk_for_post(node: Any, code: str) -> dict[str, Any] | None:
             if found is not None:
                 return found
     return None
+
+
+def _find_video(post: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Return the post owning the video and the video item itself.
+
+    A repost or a quote carries no media of its own; the video belongs to the
+    embedded post, and so do its caption and author.
+    """
+    for candidate in [post, *_embedded_posts(post)]:
+        media = _first_video_item(candidate)
+        if media is not None:
+            return candidate, media
+    return post, None
+
+
+def _embedded_posts(post: dict[str, Any]) -> list[dict[str, Any]]:
+    info = post.get("text_post_app_info") or {}
+    share = info.get("share_info") or {}
+    embedded = (
+        info.get("linked_inline_media"),
+        share.get("reposted_post"),
+        share.get("quoted_post"),
+    )
+    return [item for item in embedded if isinstance(item, dict)]
 
 
 def _first_video_item(post: dict[str, Any]) -> dict[str, Any] | None:
