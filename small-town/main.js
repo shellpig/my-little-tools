@@ -1460,6 +1460,211 @@ function updateUI() {
   if (!dragging) slider.value = time;
 }
 
+// ---------- cats ----------
+
+// Eight cats, each with its own coat, hide around town. Click one to find
+// it: it meows, hearts float up and it slips off to another hiding spot.
+// Their eyes shine at night, which makes them easier to spot after dark.
+const CATS = [
+  { name: '橘子', coat: 0xe8913a, patch: 0xfbd3a0, eyes: 0x9be564 },
+  { name: '煤球', coat: 0x2a2a2f, patch: 0x2a2a2f, eyes: 0xf5d547 },
+  { name: '雪球', coat: 0xf6f3ec, patch: 0xf6f3ec, eyes: 0x6fb7ff },
+  { name: '三花', coat: 0xf6f3ec, patch: 0xe8913a, patch2: 0x2a2a2f, muzzle: 0xf6f3ec, eyes: 0xf5b547 },
+  { name: '灰灰', coat: 0x8c939d, patch: 0xc3c8cf, eyes: 0xf2c94c },
+  { name: '奶茶', coat: 0xeadcc2, patch: 0x5b4032, eyes: 0x5aa7ff, points: true },
+  { name: '乳牛', coat: 0xf6f3ec, patch: 0x2a2a2f, muzzle: 0xf6f3ec, ears: 0x2a2a2f, eyes: 0x9be564 },
+  { name: '虎斑', coat: 0xa88f6a, patch: 0x5e4a33, muzzle: 0xd8c6a5, eyes: 0x9be564, stripes: true },
+];
+const CAT_LINES = ['喵～被你找到了！', '（伸懶腰）', '呼嚕呼嚕……', '喵？你看得到我？', '（舔爪子）', '這裡曬太陽最舒服。'];
+const CAT_SCALE = 0.8;
+
+// Hiding spots as x, z; the height is wherever a ray from above lands, so
+// a spot can be a rooftop, an awning, a car roof or a tree.
+const CAT_SPOTS = [
+  [-1.72, -2.1], [-2.72, -2.1], [1.72, -2.1], [0.45, -2.6], [2.5, -4.9],
+  [-4.55, -9.3], [4.55, -9.3], [-7.2, -9.5], [8.2, -9.4],
+  [SHELTER_X, SHELTER_Z], [0.2, -1.47], [GAS.x + 0.3, GAS.z], [PARKING_STALLS[3].x, PARKING_STALLS[3].z],
+  [ALLEYS[0], -3.6], [ALLEYS[1], -4.6], [0.53, PARK.cz], [-0.95, PARK.cz + 0.25],
+  [3.2, PARK.zMax + 0.6], [-6.5, PARK.zMax + 1.2], [-3.4, PARK.cz + 1.6],
+];
+
+const cats = [];
+const catSpots = [];
+
+function makeCat(c) {
+  const g = new THREE.Group();
+  const m = color => std(color, { roughness: 0.8 });
+  const coat = m(c.coat);
+  const patch = m(c.patch);
+  const ends = c.points ? patch : coat;
+  // Eyes are dark by day and shine in their own colour at night.
+  const eyes = std(0x111111, { emissive: c.eyes, emissiveIntensity: 0 });
+  glowing.push([eyes, 3]);
+  const part = (w, h, d, mat, x, y, z, parent = g) => box(w, h, d, mat, x, y, z, true, parent);
+
+  part(0.13, 0.055, 0.07, coat, 0, 0.05, 0);
+  for (const [x, z] of [[0.045, 0.022], [0.045, -0.022], [-0.045, 0.022], [-0.045, -0.022]]) part(0.016, 0.03, 0.016, ends, x, 0.015, z);
+  part(0.06, 0.012, 0.072, patch, -0.01, 0.0775, 0);
+  if (c.patch2) part(0.035, 0.013, 0.05, m(c.patch2), 0.035, 0.078, 0.008);
+  if (c.stripes) for (const x of [-0.04, 0, 0.04]) part(0.012, 0.058, 0.074, patch, x, 0.05, 0);
+
+  const head = new THREE.Group();
+  head.position.set(0.075, 0.085, 0);
+  g.add(head);
+  part(0.06, 0.055, 0.062, coat, 0.01, 0, 0, head);
+  part(0.02, 0.022, 0.036, m(c.muzzle ?? (c.points ? c.patch : c.coat)), 0.04, -0.012, 0, head);
+  for (const z of [-0.018, 0.018]) {
+    part(0.016, 0.022, 0.014, m(c.ears ?? (c.points ? c.patch : c.coat)), 0.005, 0.036, z, head);
+    part(0.004, 0.011, 0.011, eyes, 0.041, 0.008, z * 0.8, head);
+  }
+
+  const tail = new THREE.Group();
+  tail.position.set(-0.065, 0.065, 0);
+  tail.rotation.z = 0.5;
+  g.add(tail);
+  part(0.012, 0.075, 0.012, c.stripes ? patch : ends, 0, 0.035, 0, tail);
+  g.scale.setScalar(CAT_SCALE);
+  return { group: g, head, tail };
+}
+
+class Cat {
+  constructor(info) {
+    this.info = info;
+    Object.assign(this, makeCat(info));
+    this.obj = this.group;
+    this.hit = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 0.24).translate(0, 0.09, 0), HIT_MAT);
+    this.hit.userData.cat = this;
+    this.obj.add(this.hit);
+    this.phase = rand() * 10;
+    this.bubbleY = 0.16;
+    this.poof = 0; // > 0 while shrinking away, < 0 while popping up again
+    scene.add(this.obj);
+  }
+
+  speech() {
+    return { name: this.info.name, role: '貓咪', line: CAT_LINES[Math.floor(Math.random() * CAT_LINES.length)] };
+  }
+
+  hideAt(spot) {
+    this.spot = spot;
+    this.obj.position.copy(spot);
+    this.obj.rotation.y = Math.random() * Math.PI * 2;
+  }
+
+  // Slip away to a free spot: shrink, move, pop up again.
+  sneakOff(delay = 0) {
+    if (this.poof) return;
+    this.wait = delay;
+    this.poof = 0.35;
+  }
+
+  update(dt) {
+    this.phase += dt;
+    this.tail.rotation.x = Math.sin(this.phase * 2.2) * 0.45;
+    this.head.rotation.y = Math.sin(this.phase * 0.7) * 0.35;
+    let size = 1 + Math.sin(this.phase * 3) * 0.02;
+    if (this.wait > 0) {
+      this.wait -= dt;
+    } else if (this.poof > 0) {
+      this.poof = Math.max(0, this.poof - dt);
+      size *= this.poof / 0.35;
+      if (this.poof === 0) {
+        const taken = new Set(cats.map(c => c.spot));
+        const free = catSpots.filter(sp => !taken.has(sp));
+        this.hideAt(free[Math.floor(Math.random() * free.length)]);
+        this.poof = -0.35;
+      }
+    } else if (this.poof < 0) {
+      this.poof = Math.min(0, this.poof + dt);
+      size *= 1 + this.poof / 0.35;
+    }
+    this.obj.scale.setScalar(CAT_SCALE * size);
+  }
+}
+
+// Where a ray straight down from above lands, ignoring people, cats and
+// anything hidden (the cars are still off the road when this runs).
+const down = new THREE.Raycaster();
+function shown(o) {
+  for (; o; o = o.parent) if (!o.visible) return false;
+  return true;
+}
+function surfaceY(x, z) {
+  down.set(new THREE.Vector3(x, 20, z), new THREE.Vector3(0, -1, 0));
+  const hit = down.intersectObjects(scene.children, true)
+    .find(h => h.object.isMesh && !h.object.isSkinnedMesh && h.object.material !== HIT_MAT && shown(h.object));
+  return hit ? hit.point.y : 0;
+}
+
+// Found cats and the number of finds, kept in this browser.
+const CAT_KEY = 'small-town:cats';
+let catBook = { found: [], finds: 0 };
+try { catBook = { ...catBook, ...JSON.parse(localStorage.getItem(CAT_KEY) || '{}') }; } catch { /* storage unavailable */ }
+
+const hex = c => `#${c.toString(16).padStart(6, '0')}`;
+function drawCatBook(fresh) {
+  $('cat-count').textContent = `${catBook.found.length}/${CATS.length}`;
+  $('cat-row').replaceChildren(...CATS.map(c => {
+    const chip = document.createElement('span');
+    const found = catBook.found.includes(c.name);
+    chip.className = `chip${found ? ' found' : ''}${c.name === fresh ? ' pop' : ''}`;
+    chip.textContent = found ? c.name : '?';
+    if (found) chip.style.background = `linear-gradient(135deg, ${hex(c.coat)} 55%, ${hex(c.patch2 ?? c.patch)} 55%)`;
+    if (found) chip.style.color = [0x2a2a2f, 0x5e4a33, 0xa88f6a, 0x8c939d].includes(c.coat) ? '#fff' : '#1d2230';
+    return chip;
+  }));
+  $('cat-total').textContent = catBook.finds ? `一共找到 ${catBook.finds} 次` : '貓咪躲在小鎮各處，點牠們一下';
+}
+
+function findCat(cat) {
+  const fresh = !catBook.found.includes(cat.info.name);
+  if (fresh) catBook.found.push(cat.info.name);
+  catBook.finds++;
+  try { localStorage.setItem(CAT_KEY, JSON.stringify(catBook)); } catch { /* storage unavailable */ }
+  drawCatBook(fresh ? cat.info.name : null);
+  cat.sneakOff(1.6);
+}
+
+// Hearts in many colours float up from where the cat was clicked.
+const HEART_COLORS = ['#ff6b8b', '#ff9f43', '#ffd93d', '#6bcB77', '#4d96ff', '#c77dff'];
+function hearts(x, y) {
+  for (let i = 0; i < 7; i++) {
+    const h = document.createElement('span');
+    h.className = 'heart';
+    h.textContent = '❤';
+    h.style.left = `${x + (Math.random() - 0.5) * 50}px`;
+    h.style.top = `${y - 10}px`;
+    h.style.color = HEART_COLORS[i % HEART_COLORS.length];
+    h.style.animationDelay = `${i * 60}ms`;
+    h.style.setProperty('--drift', `${(Math.random() - 0.5) * 60}px`);
+    h.addEventListener('animationend', () => h.remove());
+    document.body.append(h);
+  }
+}
+
+function addCats() {
+  // Nothing has been rendered yet, so bring world matrices up to date for the rays.
+  scene.updateMatrixWorld(true);
+  for (const [x, z] of CAT_SPOTS) catSpots.push(new THREE.Vector3(x, surfaceY(x, z), z));
+  const order = [...catSpots].sort(() => Math.random() - 0.5);
+  CATS.forEach((info, i) => {
+    const cat = new Cat(info);
+    cat.hideAt(order[i]);
+    cats.push(cat);
+  });
+  drawCatBook();
+}
+
+// Now and then a cat wanders off to somewhere new on its own.
+let wanderIn = 45;
+function updateCats(dt) {
+  for (const cat of cats) cat.update(dt);
+  if ((wanderIn -= dt) > 0) return;
+  wanderIn = 40 + Math.random() * 50;
+  const cat = cats[Math.floor(Math.random() * cats.length)];
+  if (cat !== talking) cat.sneakOff();
+}
+
 // ---------- talking to people ----------
 
 // A click (not a drag) on someone makes them hop and say a line in a
@@ -1476,9 +1681,14 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   pointer.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObjects(walkers.filter(w => w.obj.visible).map(w => w.hit), false)[0];
+  const targets = [...walkers.filter(w => w.obj.visible), ...cats.filter(c => !c.poof)].map(w => w.hit);
+  const hit = raycaster.intersectObjects(targets, false)[0];
   if (!hit) return;
-  const person = hit.object.userData.person;
+  const person = hit.object.userData.person ?? hit.object.userData.cat;
+  if (hit.object.userData.cat) {
+    findCat(person);
+    hearts(e.clientX, e.clientY);
+  }
   const { name, role, line } = person.speech();
   bubble.querySelector('b').textContent = name;
   bubble.querySelector('span').textContent = role;
@@ -1486,7 +1696,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   bubble.hidden = false;
   talking = person;
   talkUntil = performance.now() + 5000;
-  person.hop = HOP;
+  if (person instanceof Person) person.hop = HOP;
 });
 
 const HOP = 0.45;
@@ -1501,12 +1711,13 @@ function updateTalk(dt) {
     w.obj.scale.set(PERSON_SCALE * (1 - k), PERSON_SCALE * (1 + k), PERSON_SCALE * (1 - k));
   }
   if (!talking) return;
-  if (performance.now() > talkUntil || !talking.obj.visible) {
+  // A found cat keeps its bubble while it lingers, and loses it as it slips away.
+  if (performance.now() > talkUntil || !talking.obj.visible || (talking.poof > 0 && !(talking.wait > 0))) {
     bubble.hidden = true;
     talking = null;
     return;
   }
-  head.copy(talking.obj.position).y += 0.32;
+  head.copy(talking.obj.position).y += talking.bubbleY ?? 0.32;
   head.project(camera);
   bubble.style.left = `${(head.x + 1) / 2 * innerWidth}px`;
   bubble.style.top = `${(1 - head.y) / 2 * innerHeight}px`;
@@ -1523,6 +1734,7 @@ function frame() {
   for (const w of walkers) w.update(dt, a);
   for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
   updateTraffic(dt, a);
+  updateCats(dt);
   updateTalk(dt);
   controls.update();
   updateUI();
@@ -1531,5 +1743,6 @@ function frame() {
 }
 
 await Promise.all([buildTown(), addPeople(), addTraffic()]);
+addCats();
 $('loading').classList.add('done');
 frame();
