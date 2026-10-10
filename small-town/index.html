@@ -24,6 +24,11 @@
   .clock { display: flex; align-items: baseline; gap: 10px; }
   .clock b { font: 600 34px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
   .clock span { font-size: 13px; color: var(--dim); }
+  .toggle { margin-left: auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px;
+    background: rgba(255, 255, 255, .04); color: var(--text); font-size: 15px; cursor: pointer; }
+  .toggle:hover { background: rgba(255, 255, 255, .1); }
+  .panel.collapsed { width: auto; }
+  .panel.collapsed #controls { display: none; }
   input[type=range] { width: 100%; margin: 14px 0 12px; accent-color: var(--accent); }
   .row { display: flex; gap: 6px; }
   .row + .row { margin-top: 6px; }
@@ -37,6 +42,7 @@
   #loading.done { opacity: 0; pointer-events: none; }
   @media (max-width: 600px) {
     .panel { left: 12px; right: 12px; bottom: 12px; width: auto; }
+    .panel.collapsed { left: auto; }
     .title { left: 16px; top: 14px; }
     .title h1 { font-size: 30px; }
   }
@@ -57,7 +63,11 @@
 </div>
 
 <div class="panel">
-  <div class="clock"><b id="clock">21:00</b><span id="period">夜晚</span></div>
+  <div class="clock">
+    <b id="clock">21:00</b><span id="period">夜晚</span>
+    <button id="toggle" class="toggle" aria-expanded="true" aria-controls="controls" title="收合（H）">▾</button>
+  </div>
+  <div id="controls">
   <input id="time" type="range" min="0" max="24" step="0.01" value="21">
   <div class="row">
     <button data-speed="0">暫停</button>
@@ -71,7 +81,8 @@
     <button data-time="18.2">黃昏</button>
     <button data-time="21">夜晚</button>
   </div>
-  <div class="hint">空白鍵暫停 · 60× 為每秒經過一分鐘</div>
+  <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘</div>
+  </div>
 </div>
 
 <div id="loading">小鎮搭建中…</div>

@@ -21,6 +21,7 @@ const PEOPLE = ['male-a', 'male-b', 'male-c', 'male-d', 'male-e', 'male-f',
   'female-a', 'female-b', 'female-c', 'female-d', 'female-e', 'female-f'].map(n => `character-${n}`);
 const PERSON_SCALE = 0.32;
 const WALKERS = 26;
+const STROLLERS = 7;
 const STREET_HALF = 9;
 
 let seed = 11;
@@ -40,9 +41,9 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0b1020, 14, 40);
 
 const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(6.5, 5.5, 8.5);
+camera.position.set(7, 7.5, 12.5);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.3, -0.8);
+controls.target.set(0, 0.2, 1.4);
 controls.enableDamping = true;
 controls.maxPolarAngle = 1.32;
 controls.minDistance = 3;
@@ -287,6 +288,162 @@ function addAwning(x, front, width, color) {
   scene.add(canopy, valance);
 }
 
+// ---------- park ----------
+
+// A fenced lawn south of the street: an entrance path leads to a ring path
+// around a fountain, with cross paths out to the side gates.
+const PARK = { cz: 4.2, ring: 1.45, xHalf: 4.6, zMin: 1.65, zMax: 7.2, path: 0.34 };
+
+// Benches sit outside the ring on the diagonals, facing the fountain.
+const BENCH_RADIUS = PARK.ring + 0.33;
+const benchSeats = [45, 135, 225, 315].flatMap(deg => {
+  const a = THREE.MathUtils.degToRad(deg);
+  const rotation = Math.atan2(-Math.cos(a), -Math.sin(a));
+  const x = Math.cos(a) * BENCH_RADIUS;
+  const z = PARK.cz + Math.sin(a) * BENCH_RADIUS;
+  // Two seats per bench, side by side along the bench.
+  return [-0.07, 0.07].map(offset => ({
+    bench: { x, z, rotation },
+    position: new THREE.Vector3(x + Math.cos(rotation) * offset + Math.sin(rotation) * 0.02, 0.035,
+      z - Math.sin(rotation) * offset + Math.cos(rotation) * 0.02),
+    rotation,
+  }));
+});
+
+function cylinder(rTop, rBottom, h, mat, x, y, z, segments = 24) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, h, segments), mat);
+  m.position.set(x, y, z);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+  return m;
+}
+
+function bench(x, z, rotation) {
+  const wood = std(0x8a5a3a, { roughness: 0.8 });
+  const iron = std(0x2c2f35, { roughness: 0.5, metalness: 0.5 });
+  const g = new THREE.Group();
+  const part = (w, h, d, mat, px, py, pz) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(px, py, pz);
+    m.castShadow = m.receiveShadow = true;
+    g.add(m);
+  };
+  part(0.32, 0.014, 0.085, wood, 0, 0.07, 0);
+  part(0.32, 0.05, 0.012, wood, 0, 0.115, -0.042);
+  for (const sx of [-0.13, 0.13]) part(0.014, 0.075, 0.085, iron, sx, 0.037, 0);
+  g.position.set(x, 0.02, z);
+  g.rotation.y = rotation;
+  scene.add(g);
+}
+
+function parkLamp(x, z, bulbMat) {
+  const iron = std(0x2c2f35, { roughness: 0.5, metalness: 0.5 });
+  cylinder(0.012, 0.016, 0.34, iron, x, 0.19, z, 8);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8), bulbMat);
+  head.position.set(x, 0.37, z);
+  scene.add(head);
+  const light = new THREE.PointLight(0xffc98a, 0, 1.8, 1.6);
+  light.position.set(x, 0.34, z);
+  scene.add(light);
+  lamps.push(light);
+}
+
+function insidePark(x, z, margin = 0) {
+  return Math.abs(x) < PARK.xHalf + margin && z > PARK.zMin - margin && z < PARK.zMax + margin;
+}
+
+function onPath(x, z) {
+  const r = Math.hypot(x, z - PARK.cz);
+  return r < PARK.ring + 0.5 // fountain, ring and benches
+    || (Math.abs(x) < 0.45 && z < PARK.cz) // entrance path
+    || (Math.abs(z - PARK.cz) < 0.4); // cross paths
+}
+
+function buildPark(jobs, plantMat) {
+  const { cz, ring, xHalf, zMin, zMax, path } = PARK;
+  const lawn = std(0x74924f);
+  const gravel = std(0xcdbf9f, { roughness: 1 });
+  const stone = std(0xb9b2a6, { roughness: 0.85 });
+
+  box(xHalf * 2, 0.02, zMax - zMin, lawn, 0, 0.01, (zMin + zMax) / 2);
+
+  const ringPath = new THREE.Mesh(new THREE.RingGeometry(ring - path / 2, ring + path / 2, 64), gravel);
+  ringPath.rotation.x = -Math.PI / 2;
+  ringPath.position.set(0, 0.022, cz);
+  ringPath.receiveShadow = true;
+  scene.add(ringPath);
+  const entrance = cz - ring - 1.3;
+  box(path, 0.012, entrance, gravel, 0, 0.022, 1.3 + entrance / 2);
+  for (const side of [-1, 1]) box(xHalf - ring, 0.012, path, gravel, side * (ring + xHalf) / 2, 0.022, cz);
+
+  // Fountain: stone basin, water with underwater lights, a two-tier pedestal.
+  const water = std(0x3f7fa8, { roughness: 0.1, metalness: 0.2, emissive: 0x5fb8ff, emissiveIntensity: 0 });
+  glowing.push([water, 0.5]);
+  cylinder(0.56, 0.6, 0.09, stone, 0, 0.045, cz, 32);
+  cylinder(0.5, 0.5, 0.012, water, 0, 0.085, cz, 32);
+  cylinder(0.06, 0.08, 0.22, stone, 0, 0.17, cz, 12);
+  cylinder(0.2, 0.11, 0.05, stone, 0, 0.29, cz, 20);
+  cylinder(0.17, 0.17, 0.008, water, 0, 0.312, cz, 20);
+  cylinder(0.025, 0.04, 0.1, water, 0, 0.36, cz, 10);
+
+  for (let i = 0; i < benchSeats.length; i += 2) {
+    const { x, z, rotation } = benchSeats[i].bench;
+    bench(x, z, rotation);
+  }
+
+  const bulbMat = std(0x222222, { emissive: 0xffe0b0, emissiveIntensity: 0 });
+  glowing.push([bulbMat, 3]);
+  parkLamp(-0.32, zMin + 0.15, bulbMat);
+  parkLamp(0.32, zMin + 0.15, bulbMat);
+  parkLamp(-(ring + 0.3), cz + 0.3, bulbMat);
+  parkLamp(ring + 0.3, cz - 0.3, bulbMat);
+  parkLamp(0.3, cz + ring + 0.3, bulbMat);
+
+  // Flowers in a ring between the fountain and the path.
+  const flowerColors = [0xf28bb0, 0xf6d55c, 0xfaf3e6, 0xe2574c, 0xb58be0].map(c => new THREE.Color(c));
+  const flowers = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.03, 0), std(0xffffff, { roughness: 0.7 }), 90);
+  const m4 = new THREE.Matrix4();
+  for (let i = 0; i < flowers.count; i++) {
+    const a = rand() * Math.PI * 2;
+    const r = 0.8 + rand() * 0.3;
+    m4.makeTranslation(Math.cos(a) * r, 0.04 + rand() * 0.02, cz + Math.sin(a) * r);
+    flowers.setMatrixAt(i, m4);
+    flowers.setColorAt(i, flowerColors[Math.floor(rand() * flowerColors.length)]);
+  }
+  flowers.castShadow = true;
+  scene.add(flowers);
+
+  // Fence round the lawn, with gaps for the entrance and the side gates.
+  const fenceMat = std(0xefebe2, { roughness: 0.8 });
+  for (let x = -xHalf + 0.24; x < xHalf; x += 0.48) {
+    if (Math.abs(x) > 0.4) jobs.push(place('suburban', 'fence', { x, z: zMin, mat: fenceMat }));
+    jobs.push(place('suburban', 'fence', { x, z: zMax, mat: fenceMat }));
+  }
+  for (let z = zMin + 0.24; z < zMax; z += 0.48) {
+    if (Math.abs(z - cz) < 0.3) continue;
+    for (const side of [-1, 1]) jobs.push(place('suburban', 'fence', { x: side * xHalf, z, rot: Math.PI / 2, mat: fenceMat }));
+  }
+  for (const x of [-0.62, 0.62]) jobs.push(place('suburban', 'planter', { x, z: zMin - 0.12, mat: plantMat }));
+
+  // Trees: dense inside the park away from the paths, sparser outside it.
+  const tree = (x, z) => jobs.push(place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
+    { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }));
+  for (let placed = 0; placed < 26;) {
+    const x = (rand() * 2 - 1) * (xHalf - 0.25);
+    const z = zMin + 0.25 + rand() * (zMax - zMin - 0.5);
+    if (onPath(x, z)) continue;
+    tree(x, z);
+    placed++;
+  }
+  for (let placed = 0; placed < 18;) {
+    const x = -10 + rand() * 20;
+    const z = 1.8 + rand() * 7;
+    if (insidePark(x, z, 0.3)) continue;
+    tree(x, z);
+    placed++;
+  }
+}
+
 // ---------- town layout ----------
 
 async function buildTown() {
@@ -328,13 +485,8 @@ async function buildTown() {
     }));
   }
 
-  // Across the street: a strip of park with trees and planters.
-  for (let i = 0; i < 26; i++) {
-    const x = -9 + rand() * 18;
-    const z = 1.8 + rand() * 5;
-    jobs.push(place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small', { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: houseMat }));
-  }
-  for (const x of [-3, -1, 1, 3]) jobs.push(place('suburban', 'planter', { x, z: 1.45, mat: houseMat }));
+  // Across the street: the park.
+  buildPark(jobs, houseMat);
 
   // Street lamps, with a real light under each head.
   const bulbMat = std(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
@@ -357,22 +509,39 @@ async function buildTown() {
 
 const walkers = [];
 
-class Walker {
+// `rank` in [0, 1) decides when a person is out: they show while it is below
+// the current activity level, so the town empties gradually at night.
+class Person {
   constructor(gltf, rank) {
+    this.gltf = gltf;
     this.obj = SkeletonUtils.clone(gltf.scene);
     this.obj.scale.setScalar(PERSON_SCALE);
     this.obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
     this.mixer = new THREE.AnimationMixer(this.obj);
-    this.walk = this.mixer.clipAction(THREE.AnimationClip.findByName(gltf.animations, 'walk'));
-    this.idle = this.mixer.clipAction(THREE.AnimationClip.findByName(gltf.animations, 'idle'));
+    this.rank = rank;
+    scene.add(this.obj);
+  }
+
+  action(name) { return this.mixer.clipAction(THREE.AnimationClip.findByName(this.gltf.animations, name)); }
+
+  face(angle) { this.obj.rotation.y = angle; }
+
+  startWalking(speed) {
+    this.speed = speed;
+    this.walk = this.action('walk');
+    this.walk.timeScale = speed / 0.38;
     this.walk.play();
     this.walk.time = rand() * this.walk.getClip().duration;
-    this.rank = rank;
-    this.speed = 0.32 + rand() * 0.12;
-    this.walk.timeScale = this.speed / 0.38;
+  }
+}
+
+class Walker extends Person {
+  constructor(gltf, rank) {
+    super(gltf, rank);
+    this.startWalking(0.32 + rand() * 0.12);
+    this.idle = this.action('idle');
     this.pause = 0;
     this.spawn(-STREET_HALF + rand() * STREET_HALF * 2);
-    scene.add(this.obj);
   }
 
   spawn(x) {
@@ -384,8 +553,6 @@ class Walker {
     this.x = x;
     this.face(this.dir * Math.PI / 2);
   }
-
-  face(angle) { this.obj.rotation.y = angle; }
 
   update(dt, activity) {
     this.mixer.update(dt);
@@ -413,13 +580,52 @@ class Walker {
   }
 }
 
+// Walks laps around the park's ring path.
+class Stroller extends Person {
+  constructor(gltf, rank) {
+    super(gltf, rank);
+    this.startWalking(0.2 + rand() * 0.1);
+    this.dir = rand() < 0.5 ? 1 : -1;
+    this.radius = PARK.ring + (rand() - 0.5) * 0.14;
+    this.angle = rand() * Math.PI * 2;
+  }
+
+  update(dt, activity) {
+    this.mixer.update(dt);
+    const lap = Math.floor(this.angle / (Math.PI * 2));
+    this.angle += this.dir * this.speed / this.radius * dt;
+    if (Math.floor(this.angle / (Math.PI * 2)) !== lap) this.obj.visible = this.rank < activity;
+    const c = Math.cos(this.angle);
+    const s = Math.sin(this.angle);
+    this.obj.position.set(c * this.radius, 0.03, PARK.cz + s * this.radius);
+    this.face(Math.atan2(-s * this.dir, c * this.dir));
+  }
+}
+
+// Sits on a park bench.
+class Sitter extends Person {
+  constructor(gltf, rank, seat) {
+    super(gltf, rank);
+    this.action('sit').play();
+    this.obj.position.copy(seat.position);
+    this.face(seat.rotation);
+  }
+
+  update(dt, activity) {
+    this.mixer.update(dt);
+    this.obj.visible = this.rank < activity;
+  }
+}
+
 async function addPeople() {
   const gltfs = await Promise.all(PEOPLE.map(n => model('mini-characters', n)));
-  for (let i = 0; i < WALKERS; i++) {
-    const w = new Walker(gltfs[i % gltfs.length], i / WALKERS);
-    w.obj.visible = w.rank < activity(time);
-    walkers.push(w);
-  }
+  const pick = i => gltfs[i % gltfs.length];
+  for (let i = 0; i < WALKERS; i++) walkers.push(new Walker(pick(i), i / WALKERS));
+  for (let i = 0; i < STROLLERS; i++) walkers.push(new Stroller(pick(i + 5), i / STROLLERS));
+  // Only some benches are taken, and people sit mostly in the daytime.
+  benchSeats.filter((_, i) => i % 3 !== 2).forEach((seat, i) =>
+    walkers.push(new Sitter(pick(i + 9), 0.3 + i * 0.12, seat)));
+  for (const w of walkers) w.obj.visible = w.rank < activity(time);
 }
 
 // ---------- time of day ----------
@@ -489,7 +695,21 @@ function setSpeed(s) {
 }
 document.querySelectorAll('[data-speed]').forEach(b => b.addEventListener('click', () => { setSpeed(+b.dataset.speed); b.blur(); }));
 document.querySelectorAll('[data-time]').forEach(b => b.addEventListener('click', () => { time = +b.dataset.time; b.blur(); }));
+// The panel can collapse to just the clock; the choice is remembered per browser.
+const panel = document.querySelector('.panel');
+const toggle = $('toggle');
+function setCollapsed(collapsed) {
+  panel.classList.toggle('collapsed', collapsed);
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  toggle.title = collapsed ? '展開（H）' : '收合（H）';
+  toggle.textContent = collapsed ? '▴' : '▾';
+  try { localStorage.setItem('small-town:collapsed', collapsed ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+try { setCollapsed(localStorage.getItem('small-town:collapsed') === '1'); } catch { /* storage unavailable */ }
+toggle.addEventListener('click', () => { setCollapsed(!panel.classList.contains('collapsed')); toggle.blur(); });
+
 addEventListener('keydown', e => {
+  if (e.code === 'KeyH') setCollapsed(!panel.classList.contains('collapsed'));
   if (e.code !== 'Space') return;
   e.preventDefault();
   setSpeed(speed ? 0 : lastSpeed);
