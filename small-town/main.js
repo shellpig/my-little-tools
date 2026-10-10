@@ -211,6 +211,8 @@ async function palette(pack) {
   const ctx = src.getContext('2d');
   ctx.drawImage(img, 0, 0);
   repaint(ctx, pack);
+  // Suburban roofs are also blue; only the glass swatch family emits light.
+  if (pack === 'suburban') return { map: paletteTexture(src), emissiveMap: swatchMask(320, 128, 64, 128) };
   const pixels = ctx.getImageData(0, 0, src.width, src.height).data;
 
   const mask = document.createElement('canvas');
@@ -234,8 +236,7 @@ function paletteTexture(canvas) {
   return t;
 }
 
-// An emissive map that lights a single palette swatch, for models whose
-// windows are not drawn with the light-blue glass swatches.
+// An emissive map that lights a specific palette region.
 function swatchMask(x, y, w, h) {
   const c = document.createElement('canvas');
   c.width = c.height = 512;
@@ -643,8 +644,6 @@ async function buildTown() {
   // Every building has its own material so its lights go out at its own time.
   const houseMat = paletteMaterial(suburban, 1.2);
   const roadMat = paletteMaterial(roads, 0);
-  // Skyline towers draw their window bands with the grey-blue swatch.
-  const towerWindows = { map: commercial.map, emissiveMap: swatchMask(32, 256, 32, 128) };
   const townHouseMat = () => paletteMaterial(commercial, [1.4, 0.7, 2.2][Math.floor(rand() * 3)], bedtime(21.5, 2.5), rand() * 0.15);
   const villaMat = () => paletteMaterial(suburban, 0.9 + rand() * 0.6, bedtime(21, 1), rand() * 0.1);
 
@@ -683,15 +682,6 @@ async function buildTown() {
     else jobs.push(building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat()));
   });
 
-  // Skyline behind the back street.
-  for (let i = 0; i < 22; i++) {
-    const name = `low-detail-building-${'abcdefghijklmn'[Math.floor(rand() * 14)]}`;
-    jobs.push(place('commercial', name, {
-      x: -12 + rand() * 24, z: BACK_NORTH.front - 3.4 - rand() * 5, rot: Math.floor(rand() * 4) * Math.PI / 2,
-      scale: 0.55 + rand() * 0.35, mat: paletteMaterial(towerWindows, 0.3 + rand() * 0.6, bedtime(22, 3), 0.2),
-    }));
-  }
-
   // South of the main street: the park, with a gas station and a car park either side.
   buildPark(jobs, houseMat);
   buildGasStation();
@@ -701,8 +691,8 @@ async function buildTown() {
   const bulbMat = std(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
   glowing.push([bulbMat, 6]);
   const LAMPS = [
-    [STREETS[0], [[-3.3, -1], [-1.25, -1], [2.75, -1], [7.8, -1], [-7.8, -1], [-2.3, 1], [1.3, 1], [4.8, 1]]],
-    [STREETS[1], [[-3.1, 1], [2.0, 1], [-1.1, -1], [3.1, -1]]],
+    [STREETS[0], [[-3.3, -1], [-1.25, -1], [2.75, -1], [7.8, -1], [-7.8, -1], [-7.8, 1], [-2.3, 1], [1.3, 1], [4.8, 1], [8, 1]]],
+    [STREETS[1], [[-3.1, 1], [2.0, 1], [-1.1, -1], [3.1, -1], [-10.15, -1], [10.45, -1]]],
   ];
   for (const [street, spots] of LAMPS) {
     for (const [x, side] of spots) {
