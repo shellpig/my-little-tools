@@ -7,6 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RESIDENTS, PASSERBY_LINES } from './residents.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -18,7 +19,7 @@ const PALETTE = {
 const PEOPLE = ['male-a', 'male-b', 'male-c', 'male-d', 'male-e', 'male-f',
   'female-a', 'female-b', 'female-c', 'female-d', 'female-e', 'female-f'].map(n => `character-${n}`);
 const PERSON_SCALE = 0.32;
-const WALKERS = 34;
+const WALKERS = 20;
 const STROLLERS = 7;
 const STREET_HALF = 9;
 
@@ -40,6 +41,15 @@ const MAIN_NORTH = { street: STREETS[0], front: STREETS[0] - FRONTAGE, facing: 1
 const MAIN_SOUTH = { street: STREETS[0], front: STREETS[0] + FRONTAGE, facing: -1 };
 const BACK_SOUTH = { street: STREETS[1], front: STREETS[1] + FRONTAGE, facing: -1 };
 const BACK_NORTH = { street: STREETS[1], front: STREETS[1] - FRONTAGE, facing: 1 };
+
+// Homes: town houses on the main street and between the streets, detached
+// houses (villas) at the ends of the back street.
+const OUTER = [-6.6, -7.6, -8.6, -9.6, 6.6, 7.6, 8.6, 9.6];
+const HOMES = [
+  ...[-3.7, -4.65, 2.68, 3.67, 4.62, ...OUTER].map(x => ({ ...MAIN_NORTH, x })),
+  ...[-4.55, -3.6, -2.6, -1.5, 0, 1.5, 2.5, 3.5, 4.55, ...OUTER].map(x => ({ ...BACK_SOUTH, x })),
+  ...[-9.4, -10.9, 9.7, 11.2].map(x => ({ ...BACK_NORTH, x, villa: true })),
+];
 
 let seed = 11;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -621,17 +631,13 @@ async function buildTown() {
     jobs.push(building('commercial', shop.model, shop.x, shop, mat).then(obj => decorateShop(obj, shop)));
   }
 
-  // Homes fill the rest: town houses on the main street and between the two
-  // streets, detached houses at the ends of the back street.
+  // Homes fill the rest of the rows.
   const townHouses = ['building-b', 'building-d', 'building-f', 'building-g'];
-  const outer = [-6.6, -7.6, -8.6, -9.6, 6.6, 7.6, 8.6, 9.6];
-  const between = [-4.55, -3.6, -2.6, -1.5, 0, 1.5, 2.5, 3.5, 4.55];
-  for (const [row, xs] of [[MAIN_NORTH, [-3.7, -4.65, 2.68, 3.67, 4.62, ...outer]], [BACK_SOUTH, [...between, ...outer]]]) {
-    xs.forEach((x, i) => jobs.push(building('commercial', x === 0 ? 'building-e' : townHouses[i % 4], x, row, townHouseMat())));
-  }
-  const villas = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g', 'building-type-h', 'building-type-j'];
-  [-9.4, -10.9, 9.7, 11.2].forEach((x, i) =>
-    jobs.push(building('suburban', villas[i % villas.length], x, BACK_NORTH, villaMat())));
+  const villas = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g'];
+  HOMES.forEach((home, i) => {
+    if (home.villa) jobs.push(building('suburban', villas[i % villas.length], home.x, home, villaMat()));
+    else jobs.push(building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat()));
+  });
 
   // Skyline behind the back street.
   for (let i = 0; i < 22; i++) {
@@ -760,15 +766,31 @@ const walkers = [];
 
 // `rank` in [0, 1) decides when a person is out: they show while it is below
 // the current activity level, so the town empties gradually at night.
+// Clicks land on an invisible box around each person: easier to hit than
+// the small skinned model.
+const HIT_BOX = new THREE.BoxGeometry(0.9, 0.8, 0.7).translate(0, 0.4, 0);
+const HIT_MAT = new THREE.MeshBasicMaterial({ visible: false });
+
+const ROLES = { Walker: '路過的人', Stroller: '散步的人', Sitter: '坐著休息的人', Passenger: '公車乘客' };
+
 class Person {
   constructor(gltf, rank) {
     this.gltf = gltf;
     this.obj = SkeletonUtils.clone(gltf.scene);
     this.obj.scale.setScalar(PERSON_SCALE);
     this.obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    this.hit = new THREE.Mesh(HIT_BOX, HIT_MAT);
+    this.hit.userData.person = this;
+    this.obj.add(this.hit);
     this.mixer = new THREE.AnimationMixer(this.obj);
     this.rank = rank;
+    this.hop = 0;
     scene.add(this.obj);
+  }
+
+  speech() {
+    const lines = PASSERBY_LINES[partOfDay(time)];
+    return { name: '路人', role: ROLES[this.constructor.name], line: lines[Math.floor(Math.random() * lines.length)] };
   }
 
   action(name) { return this.mixer.clipAction(THREE.AnimationClip.findByName(this.gltf.animations, name)); }
@@ -978,6 +1000,134 @@ class Passenger extends Person {
   }
 }
 
+// ---------- residents ----------
+
+// Residents walk a day plan in game time: where they are follows the clock,
+// so scrubbing or speeding up time moves them like a time-lapse.
+const WALK_SPEED = 22.8; // town units per game hour: 0.38 per second at 60×
+
+const partOfDay = t => (t >= 5 && t < 11 ? 'morning' : t >= 11 && t < 17 ? 'day' : t >= 17 && t < 22 ? 'evening' : 'night');
+
+// Which sidewalk of each street faces the block between the two streets,
+// and where each street can be crossed.
+const BLOCK_SIDE = new Map([[STREETS[0], -1], [STREETS[1], 1]]);
+const CROSSINGS = new Map([[STREETS[0], [...ALLEYS, 0]], [STREETS[1], ALLEYS]]);
+
+// A place is a door on a sidewalk: x along the street, the street, which
+// side of it (−1 north, +1 south) and the door point itself.
+function door(x, row) {
+  return { x, street: row.street, side: -row.facing, door: new THREE.Vector3(x, 0.05, row.front + row.facing * 0.05) };
+}
+
+const PLACES = new Map([
+  ...[...SHOPS, ...CIVIC].map(s => [s.name, door(s.x, s)]),
+  [HOTEL.name, { x: 0, street: STREETS[0], side: -1, door: HOTEL_DOOR }],
+  ['公車站', { x: STOP_X - 0.43, street: STREETS[0], side: -1, door: new THREE.Vector3(STOP_X - 0.43, 0.05, -ROAD_HALF - 0.06), away: true }],
+  ['加油站', { x: GAS.x - 1.1, street: STREETS[0], side: 1, door: new THREE.Vector3(GAS.x - 1.1, 0.03, GAS.z + 0.35) }],
+  ['公園', { x: 0, street: STREETS[0], side: 1, door: new THREE.Vector3(0, 0.03, PARK.cz - PARK.ring), park: true }],
+]);
+
+// Hand out homes in order: upstairs from the workplace, or the next free
+// town house or villa (villas are shared by families when they run out).
+const townHouseDoors = HOMES.filter(h => !h.villa).map(h => door(h.x, h));
+const villaDoors = HOMES.filter(h => h.villa).map(h => door(h.x, h));
+let nextTownHouse = 0;
+let nextVilla = 0;
+function homeFor(info) {
+  if (info.home === 'upstairs') return PLACES.get(info.work);
+  if (info.home === 'villa') return villaDoors[nextVilla++ % villaDoors.length];
+  return townHouseDoors[nextTownHouse++ % townHouseDoors.length];
+}
+
+// The sidewalk line a resident keeps to; on the main street's north side
+// they keep to the shop side, clear of the bus shelter.
+function walkZ(street, side, lane) {
+  const inner = street === STREETS[0] && side < 0 ? 0.45 : 0.2;
+  return street + side * (ROAD_HALF + inner + lane * 0.3);
+}
+
+// Door to door along sidewalks, crossing a street only at a crossing and
+// changing streets only by a lane.
+function route(a, b, lane) {
+  const pts = [a.door.clone()];
+  const at = (x, street, side) => pts.push(new THREE.Vector3(x, 0.05, walkZ(street, side, lane)));
+  const via = (xs, x0, x1) => xs.reduce((best, x) =>
+    (Math.abs(x0 - x) + Math.abs(x - x1) < Math.abs(x0 - best) + Math.abs(best - x1) ? x : best));
+  at(a.x, a.street, a.side);
+  if (a.street === b.street) {
+    if (a.side !== b.side) {
+      const x = via(CROSSINGS.get(a.street), a.x, b.x);
+      at(x, a.street, a.side);
+      at(x, b.street, b.side);
+    }
+  } else {
+    const x = via(ALLEYS, a.x, b.x) + (lane - 0.5) * 0.4;
+    const aBlock = BLOCK_SIDE.get(a.street);
+    const bBlock = BLOCK_SIDE.get(b.street);
+    at(x, a.street, a.side);
+    if (a.side !== aBlock) at(x, a.street, aBlock);
+    at(x, b.street, bBlock);
+    if (b.side !== bBlock) at(x, b.street, b.side);
+  }
+  at(b.x, b.street, b.side);
+  pts.push(b.door.clone());
+  return pts;
+}
+
+class Resident extends Person {
+  constructor(gltf, info) {
+    super(gltf, 0);
+    this.info = info;
+    this.walk = this.action('walk');
+    this.walk.play();
+    this.lane = rand();
+    this.strollDir = rand() < 0.5 ? 1 : -1;
+    const home = homeFor(info);
+    const stops = info.plan.map(([hour, key]) => [hour, key === 'home' ? home : PLACES.get(key)]);
+    // Each leg runs from the previous stop; the first from where yesterday ended.
+    // Going upstairs from the shop below is no walk at all.
+    this.legs = stops.map(([start, to], i) => {
+      const from = stops[(i + stops.length - 1) % stops.length][1];
+      const pts = from === to ? [to.door] : route(from, to, this.lane);
+      const lengths = pts.slice(1).map((q, k) => q.distanceTo(pts[k]));
+      return { start, to, pts, lengths, length: lengths.reduce((a, b) => a + b, 0) };
+    });
+  }
+
+  speech() {
+    return { name: this.info.name, role: this.info.job, line: this.info.say[partOfDay(time)] };
+  }
+
+  update(dt) {
+    this.walk.timeScale = Math.min(speed / 60, 4);
+    this.mixer.update(dt);
+    const leg = this.legs.findLast(l => l.start <= time) ?? this.legs.at(-1);
+    let walked = ((time - leg.start + 24) % 24) * WALK_SPEED;
+    const p = this.obj.position;
+    if (walked < leg.length) {
+      // On the way: find the segment and the point along it.
+      let k = 0;
+      while (walked > leg.lengths[k]) walked -= leg.lengths[k++];
+      const a = leg.pts[k];
+      const b = leg.pts[k + 1];
+      p.lerpVectors(a, b, leg.lengths[k] ? walked / leg.lengths[k] : 1);
+      this.face(Math.atan2(b.x - a.x, b.z - a.z));
+      this.obj.visible = true;
+    } else if (leg.to.park) {
+      // In the park: laps of the ring path from the entrance.
+      const r = PARK.ring + (this.lane - 0.5) * 0.12;
+      const angle = -Math.PI / 2 + this.strollDir * (walked - leg.length) / r;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      p.set(c * r, 0.03, PARK.cz + s * r);
+      this.face(Math.atan2(-s * this.strollDir, c * this.strollDir));
+      this.obj.visible = true;
+    } else {
+      this.obj.visible = false;
+    }
+  }
+}
+
 let peopleGltfs = [];
 
 async function addPeople() {
@@ -989,6 +1139,7 @@ async function addPeople() {
   benchSeats.filter((_, i) => i % 3 !== 2).forEach((seat, i) =>
     walkers.push(new Sitter(pick(i + 9), 0.3 + i * 0.12, seat)));
   SHELTER_SEATS.forEach((seat, i) => walkers.push(new Sitter(pick(i + 3), 0.2 + i * 0.35, seat)));
+  for (const info of RESIDENTS) walkers.push(new Resident(gltfs[PEOPLE.indexOf(`character-${info.look}`)], info));
   for (const w of walkers) {
     w.obj.visible = w.rank < activity(time);
     if (!w.obj.visible && w.state) w.state = 'away';
@@ -1309,6 +1460,58 @@ function updateUI() {
   if (!dragging) slider.value = time;
 }
 
+// ---------- talking to people ----------
+
+// A click (not a drag) on someone makes them hop and say a line in a
+// bubble that follows them around for a few seconds.
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const bubble = $('bubble');
+let talking = null;
+let talkUntil = 0;
+let downAt = null;
+
+renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  pointer.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObjects(walkers.filter(w => w.obj.visible).map(w => w.hit), false)[0];
+  if (!hit) return;
+  const person = hit.object.userData.person;
+  const { name, role, line } = person.speech();
+  bubble.querySelector('b').textContent = name;
+  bubble.querySelector('span').textContent = role;
+  bubble.querySelector('p').textContent = line;
+  bubble.hidden = false;
+  talking = person;
+  talkUntil = performance.now() + 5000;
+  person.hop = HOP;
+});
+
+const HOP = 0.45;
+const head = new THREE.Vector3();
+
+function updateTalk(dt) {
+  for (const w of walkers) {
+    if (w.hop <= 0) continue;
+    w.hop = Math.max(0, w.hop - dt);
+    // Squash and stretch: a quick boing on the spot.
+    const k = Math.sin((1 - w.hop / HOP) * Math.PI * 2) * 0.18 * (w.hop / HOP);
+    w.obj.scale.set(PERSON_SCALE * (1 - k), PERSON_SCALE * (1 + k), PERSON_SCALE * (1 - k));
+  }
+  if (!talking) return;
+  if (performance.now() > talkUntil || !talking.obj.visible) {
+    bubble.hidden = true;
+    talking = null;
+    return;
+  }
+  head.copy(talking.obj.position).y += 0.32;
+  head.project(camera);
+  bubble.style.left = `${(head.x + 1) / 2 * innerWidth}px`;
+  bubble.style.top = `${(1 - head.y) / 2 * innerHeight}px`;
+}
+
 // ---------- main loop ----------
 
 const clock = new THREE.Clock();
@@ -1320,6 +1523,7 @@ function frame() {
   for (const w of walkers) w.update(dt, a);
   for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
   updateTraffic(dt, a);
+  updateTalk(dt);
   controls.update();
   updateUI();
   composer.render();

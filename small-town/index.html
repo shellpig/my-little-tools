@@ -37,6 +37,14 @@
   .row button:hover { background: rgba(255, 255, 255, .1); }
   .row button.on { background: #f3f5f9; color: #111; }
   .hint { margin-top: 10px; font-size: 12px; color: var(--dim); }
+  .bubble { position: fixed; z-index: 5; max-width: 220px; padding: 9px 12px 10px; pointer-events: none;
+    transform: translate(-50%, calc(-100% - 12px)); background: rgba(250, 248, 243, .96); color: #1d2230;
+    border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, .28); }
+  .bubble::after { content: ""; position: absolute; left: 50%; bottom: -7px; margin-left: -7px;
+    border: 7px solid transparent; border-bottom: 0; border-top-color: rgba(250, 248, 243, .96); }
+  .bubble b { font-size: 14px; }
+  .bubble span { margin-left: 6px; font-size: 12px; color: #6b7280; }
+  .bubble p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; }
   #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 15px; color: var(--dim);
     background: #0b1020; transition: opacity .6s; }
   #loading.done { opacity: 0; pointer-events: none; }
@@ -59,7 +67,7 @@
 <body>
 <div class="title">
   <h1>小鎮</h1>
-  <p>兩條街、十多家店。拖曳旋轉，滾輪縮放，右鍵平移。</p>
+  <p>兩條街、三十位居民。點一下路上的人聽他說話；拖曳旋轉，滾輪縮放，右鍵平移。</p>
 </div>
 
 <div class="panel">
@@ -84,6 +92,8 @@
   <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘</div>
   </div>
 </div>
+
+<div id="bubble" class="bubble" hidden><b></b><span></span><p></p></div>
 
 <div id="loading">小鎮搭建中…</div>
 
