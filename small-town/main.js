@@ -9,6 +9,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RESIDENTS, PASSERBY_LINES } from './residents.js';
 import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
+import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -71,6 +72,8 @@ scene.fog = new THREE.Fog(0x0b1020, 20, 55);
 const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
 camera.position.set(4, 12, 13);
 const controls = new OrbitControls(camera, renderer.domElement);
+controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 controls.target.set(0, 0.2, -2.2);
 controls.enableDamping = true;
 controls.maxPolarAngle = 1.32;
@@ -1502,6 +1505,7 @@ try { setCollapsed(localStorage.getItem('small-town:collapsed') === '1'); } catc
 toggle.addEventListener('click', () => { setCollapsed(!panel.classList.contains('collapsed')); toggle.blur(); });
 
 addEventListener('keydown', e => {
+  if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyH') setCollapsed(!panel.classList.contains('collapsed'));
   if (e.code !== 'Space') return;
   e.preventDefault();
@@ -1820,7 +1824,7 @@ renderer.domElement.addEventListener('pointermove', e => {
 });
 renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', e => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   aim(e);
   const targets = [
     ...wishes.clickables(),
@@ -1879,8 +1883,19 @@ const PLAYER_R = 0.09;
 const WALK = 0.55;
 const RUN = 1.25;
 const BOUNDS = { minX: -12.5, maxX: 12.5, minZ: BACK_NORTH.front - 2.8, maxZ: PARK.zMax + 3 };
-const player = { active: false, look: 'male-f', pos: new THREE.Vector3(0.6, 0, MAIN_SOUTH.front - 0.35), obj: null };
-try { player.look = JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}').look ?? player.look; } catch { /* storage unavailable */ }
+const player = { active: false, look: 'male-f', name: '', outfit: {}, pos: new THREE.Vector3(0.6, 0, MAIN_SOUTH.front - 0.35), obj: null };
+try {
+  const saved = JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}');
+  Object.assign(player, { look: saved.look ?? player.look, name: saved.name ?? '', outfit: saved.outfit ?? {} });
+} catch { /* storage unavailable */ }
+function savePlayer() {
+  try {
+    localStorage.setItem(PLAYER_KEY, JSON.stringify({ look: player.look, name: player.name, outfit: player.outfit }));
+    $('player-save-status').textContent = '變更已自動儲存';
+  } catch {
+    $('player-save-status').textContent = '無法儲存，設定僅保留於本次使用';
+  }
+}
 const keys = new Set();
 const stick = { x: 0, y: 0 };
 const overview = { pos: camera.position.clone(), target: controls.target.clone() };
@@ -1935,9 +1950,8 @@ function collide(p) {
 function dressPlayer() {
   if (player.obj) scene.remove(player.obj);
   const gltf = peopleGltfs[PEOPLE.indexOf(`character-${player.look}`)];
-  const obj = SkeletonUtils.clone(gltf.scene);
+  const obj = wardrobe.dress(player.look, player.outfit);
   obj.scale.setScalar(PERSON_SCALE);
-  obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
   obj.position.copy(player.pos);
   obj.rotation.y = player.obj?.rotation.y ?? Math.PI;
   scene.add(obj);
@@ -1975,12 +1989,149 @@ function togglePlay() {
   }
 }
 
-function changeLook(step = 1) {
-  const looks = PEOPLE.map(n => n.replace('character-', ''));
-  player.look = looks[(looks.indexOf(player.look) + step + looks.length) % looks.length];
-  try { localStorage.setItem(PLAYER_KEY, JSON.stringify({ look: player.look })); } catch { /* storage unavailable */ }
-  if (player.active) dressPlayer();
+// ---------- the closet ----------
+
+// Pick a body, recolour it and put something on, on a turntable that can be
+// dragged round. The player and the turntable share one material, so a new
+// colour shows on both at once.
+const LOOKS = PEOPLE.map(n => n.replace('character-', ''));
+let wardrobe = null;
+
+async function addWardrobe() {
+  const aids = await Promise.all(ACCESSORIES.filter(a => a.glb).map(async a => [a.glb, await model('mini-characters', a.glb)]));
+  wardrobe = createWardrobe(Object.fromEntries(LOOKS.map((look, i) => [look, peopleGltfs[i]])), Object.fromEntries(aids));
 }
+
+const closet = $('closet');
+const stage = new THREE.Scene();
+stage.add(new THREE.HemisphereLight('#ffffff', '#7c8296', 2.2));
+const keyLight = new THREE.DirectionalLight('#fff4e0', 2.4);
+keyLight.position.set(1.5, 2.5, 2);
+stage.add(keyLight);
+const viewCam = new THREE.PerspectiveCamera(28, 1, 0.1, 20);
+viewCam.position.set(0, 0.5, 3.4);
+viewCam.lookAt(0, 0.35, 0);
+let view = null;
+const turn = { angle: 0.5, from: null, obj: null, mixer: null, clock: new THREE.Clock() };
+
+function showPreview() {
+  if (turn.obj) stage.remove(turn.obj);
+  turn.obj = wardrobe.dress(player.look, player.outfit);
+  turn.mixer = new THREE.AnimationMixer(turn.obj);
+  const gltf = peopleGltfs[LOOKS.indexOf(player.look)];
+  turn.mixer.clipAction(THREE.AnimationClip.findByName(gltf.animations, 'idle')).play();
+  stage.add(turn.obj);
+}
+
+function spin() {
+  if (closet.hidden) return;
+  const dt = Math.min(turn.clock.getDelta(), 0.1);
+  if (turn.from === null) turn.angle += dt * 0.5;
+  turn.obj.rotation.y = turn.angle;
+  turn.mixer.update(dt);
+  const canvas = view.domElement;
+  if (canvas.width !== Math.round(canvas.clientWidth * view.getPixelRatio())) {
+    view.setSize(canvas.clientWidth, canvas.clientHeight, false);
+    viewCam.aspect = canvas.clientWidth / canvas.clientHeight;
+    viewCam.updateProjectionMatrix();
+  }
+  view.render(stage, viewCam);
+  requestAnimationFrame(spin);
+}
+
+function openCloset(open = closet.hidden) {
+  if (!wardrobe) return;
+  closet.hidden = !open;
+  if (!open) return;
+  keys.clear();
+  releaseStick();
+  if (!view) {
+    view = new THREE.WebGLRenderer({ canvas: $('closet-view'), antialias: true, alpha: true });
+    view.setPixelRatio(Math.min(devicePixelRatio, 2));
+  }
+  $('player-name').value = player.name;
+  showPreview();
+  renderCloset();
+  turn.clock.getDelta();
+  spin();
+}
+
+// Something about the outfit changed: save it, and redress whoever needs it.
+function restyle(change) {
+  if (change.look) {
+    player.look = change.look;
+    showPreview();
+    if (player.active) dressPlayer();
+  } else if ('accessory' in change) {
+    player.outfit.accessory = change.accessory;
+    wardrobe.wear(turn.obj, player.look, change.accessory);
+    if (player.obj) wardrobe.wear(player.obj, player.look, change.accessory);
+  } else {
+    Object.assign(player.outfit, change);
+    for (const [part, color] of Object.entries(change)) if (!color) delete player.outfit[part];
+    wardrobe.paint(player.look, player.outfit);
+  }
+  savePlayer();
+  renderCloset();
+}
+
+function renderCloset() {
+  $('looks').replaceChildren(...LOOKS.map(look => {
+    const b = document.createElement('button');
+    b.className = look === player.look ? 'on' : '';
+    b.title = look;
+    b.innerHTML = `<img src="${ASSETS}/mini-characters/Previews/character-${look}.png" alt="">`;
+    b.onclick = () => restyle({ look });
+    return b;
+  }));
+  $('colors').replaceChildren(...PARTS.flatMap(({ id, label, colors }) => {
+    const title = document.createElement('div');
+    title.className = 'opt-label';
+    title.textContent = label;
+    const row = document.createElement('div');
+    row.className = 'colors';
+    const swatch = (color, text) => {
+      const b = document.createElement('button');
+      b.className = (player.outfit[id] ?? '') === color ? 'on' : '';
+      if (color) b.style.background = color;
+      else [b.className, b.textContent, b.title] = [`${b.className} orig`, text, '原本的顏色'];
+      b.onclick = () => restyle({ [id]: color });
+      return b;
+    };
+    const pick = document.createElement('input');
+    pick.type = 'color';
+    pick.title = '自訂顏色';
+    pick.value = player.outfit[id] ?? colors[0];
+    pick.oninput = () => restyle({ [id]: pick.value });
+    row.append(swatch('', '原'), ...colors.map(c => swatch(c)), pick);
+    return [title, row];
+  }));
+  $('accessories').replaceChildren(...ACCESSORIES.map(({ id, label }) => {
+    const b = document.createElement('button');
+    b.className = (player.outfit.accessory ?? '') === id ? 'on' : '';
+    b.textContent = label;
+    b.onclick = () => restyle({ accessory: id });
+    return b;
+  }));
+}
+
+$('closet-view').addEventListener('pointerdown', e => {
+  e.currentTarget.setPointerCapture(e.pointerId);
+  turn.from = [e.clientX, turn.angle];
+});
+$('closet-view').addEventListener('pointermove', e => {
+  if (turn.from) turn.angle = turn.from[1] + (e.clientX - turn.from[0]) * 0.012;
+});
+$('closet-view').addEventListener('pointerup', () => { turn.from = null; });
+$('closet-view').addEventListener('pointercancel', () => { turn.from = null; });
+$('player-name').addEventListener('input', e => {
+  player.name = e.target.value.trim();
+  savePlayer();
+});
+$('dress').addEventListener('click', e => { openCloset(); e.currentTarget.blur(); });
+$('closet-close').addEventListener('click', () => openCloset(false));
+$('closet-done').addEventListener('click', () => openCloset(false));
+closet.addEventListener('click', e => { if (e.target === closet) openCloset(false); });
 
 // Whoever or whatever is close enough to use: people and cats within reach
 // (cats on roofs only from the roof), or the fountain's rim.
@@ -2024,11 +2175,18 @@ function interact() {
   } else {
     it.hop = HOP;
   }
-  talk(it, it.speech());
+  const said = it.speech();
+  // Residents call a named player by name.
+  if (it instanceof Resident && player.name) said.line = `${player.name}，${said.line}`;
+  talk(it, said);
 }
 
 const MOVE_KEYS = { KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1], KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0] };
 addEventListener('keydown', e => {
+  if (e.code === 'Escape') openCloset(false);
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.code === 'KeyC' && !e.repeat) openCloset();
+  if (!closet.hidden) return;
   if (e.code === 'KeyP') togglePlay();
   if (!player.active) return;
   if (MOVE_KEYS[e.code] || e.code.startsWith('Shift')) {
@@ -2036,7 +2194,6 @@ addEventListener('keydown', e => {
     if (e.code.startsWith('Arrow')) e.preventDefault();
   }
   if (e.code === 'KeyE' && !e.repeat) interact();
-  if (e.code === 'KeyC' && !e.repeat) changeLook();
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -2062,9 +2219,29 @@ const releaseStick = () => { knob.style.transform = ''; stick.x = stick.y = 0; }
 stickEl.addEventListener('pointerup', releaseStick);
 stickEl.addEventListener('pointercancel', releaseStick);
 
+// A resident who passes close greets a named player, at most once a minute each.
+const GREETINGS = { morning: '早安！', day: '午安！', evening: '晚上好！', night: '這麼晚還在散步呀？' };
+const greetedAt = new Map();
+function greetPlayer() {
+  const now = performance.now();
+  if (!player.name || (talking && now < talkUntil)) return;
+  let best = null;
+  let bestD = 0.45;
+  for (const w of walkers) {
+    if (!(w instanceof Resident) || !w.obj.visible) continue;
+    if (now - (greetedAt.get(w) ?? -Infinity) < 60000) continue;
+    const d = Math.hypot(w.obj.position.x - player.pos.x, w.obj.position.z - player.pos.z);
+    if (d < bestD) [best, bestD] = [w, d];
+  }
+  if (!best) return;
+  greetedAt.set(best, now);
+  best.hop = HOP;
+  talk(best, { name: best.info.name, role: best.info.job, line: `${player.name}，${GREETINGS[partOfDay(time)]}` });
+}
+
 const forward = new THREE.Vector3();
 function updatePlayer(dt) {
-  if (!player.active) return;
+  if (!player.active || !closet.hidden) return;
   let ix = stick.x;
   let iz = -stick.y;
   for (const code of keys) {
@@ -2097,6 +2274,7 @@ function updatePlayer(dt) {
   camera.position.add(moved);
   controls.target.add(moved);
 
+  greetPlayer();
   const label = promptFor(nearby());
   $('prompt').hidden = !label;
   $('prompt').textContent = `E　${label}`;
@@ -2128,5 +2306,6 @@ function frame() {
 await Promise.all([buildTown(), addPeople(), addTraffic()]);
 addCats();
 addWishes();
+await addWardrobe();
 $('loading').classList.add('done');
 frame();

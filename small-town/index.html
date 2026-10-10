@@ -90,6 +90,39 @@
     body.playing .act { display: block; }
     body.playing .prompt { display: none; }
   }
+  .dress { top: 156px; }
+  .closet { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; background: rgba(5, 8, 16, .45); }
+  .closet[hidden] { display: none; }
+  .closet-card { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box;
+    padding: 14px 18px 18px; background: rgba(16, 20, 30, .94); border: 1px solid var(--line); border-radius: 16px; }
+  .closet-head { display: flex; align-items: center; font-size: 17px; }
+  .closet-head .toggle { margin-left: auto; }
+  .closet-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+    margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .closet-footer span { font-size: 12px; color: var(--dim); }
+  .closet-done { min-height: 44px; padding: 10px 24px; border: 0; border-radius: 10px;
+    background: var(--accent); color: #1d2230; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .closet-done:hover { background: #ffe0a3; }
+  .closet-body { display: grid; grid-template-columns: 250px 1fr; gap: 20px; margin-top: 10px; }
+  #closet-view { width: 100%; height: 360px; border-radius: 12px; cursor: grab; touch-action: none;
+    background: radial-gradient(circle at 50% 62%, rgba(255, 255, 255, .16), rgba(255, 255, 255, .02) 70%); }
+  .opt-label { margin: 12px 0 6px; font-size: 12px; color: var(--dim); }
+  .name { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--dim); }
+  .name input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, .06);
+    color: var(--text); font-family: inherit; font-size: 14px; }
+  .looks { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .looks button { padding: 0; aspect-ratio: 1; overflow: hidden; border: 2px solid transparent; border-radius: 10px;
+    background: rgba(255, 255, 255, .07); cursor: pointer; }
+  .looks img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .colors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .colors button { width: 26px; height: 26px; padding: 0; border: 2px solid rgba(255, 255, 255, .2); border-radius: 50%; cursor: pointer; }
+  .colors button.orig { background: rgba(255, 255, 255, .08); color: var(--text); font-family: inherit; font-size: 11px; }
+  .colors input { width: 30px; height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
+  .looks button.on, .colors button.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(255, 210, 122, .35); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips button { padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, .05);
+    color: var(--text); font-family: inherit; font-size: 13px; cursor: pointer; }
+  .chips button.on { background: #f3f5f9; color: #111; }
   #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 15px; color: var(--dim);
     background: #0b1020; transition: opacity .6s; }
   #loading.done { opacity: 0; pointer-events: none; }
@@ -100,6 +133,9 @@
     .title h1 { font-size: 30px; }
     .cats { top: auto; bottom: 96px; right: 12px; width: 200px; }
     .play { left: 16px; top: 100px; }
+    .dress { top: 144px; }
+    .closet-body { grid-template-columns: 1fr; }
+    #closet-view { height: 220px; }
     body.playing .cats { display: none; }
   }
 </style>
@@ -115,7 +151,7 @@
 <body>
 <div class="title">
   <h1>小鎮</h1>
-  <p>點路上的人聽他說話，找出躲起來的貓，點噴水池許願。拖曳旋轉，滾輪縮放，右鍵平移。</p>
+  <p>點路上的人聽他說話，找出躲起來的貓，點噴水池許願。左鍵拖曳平移，右鍵拖曳旋轉，滾輪縮放。</p>
 </div>
 
 <div class="panel">
@@ -137,7 +173,7 @@
     <button data-time="18.2">黃昏</button>
     <button data-time="21">夜晚</button>
   </div>
-  <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘<br>散步模式：WASD 走、Shift 跑、E 互動、C 換角色、P 離開</div>
+  <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘<br>散步模式：WASD 走、Shift 跑、E 互動、C 換裝、P 離開</div>
   </div>
 </div>
 
@@ -150,9 +186,31 @@
 </div>
 
 <button id="play" class="play">🚶 散步模式（P）</button>
+<button id="dress" class="play dress">👕 換裝（C）</button>
 <div id="prompt" class="prompt" hidden></div>
 <div id="stick" class="stick"><div class="knob"></div></div>
 <button id="act" class="act" disabled>互動</button>
+
+<div id="closet" class="closet" hidden>
+  <div class="closet-card" role="dialog" aria-label="換裝">
+    <div class="closet-head"><b>換裝</b><button id="closet-close" class="toggle" title="關閉（C / Esc）">✕</button></div>
+    <div class="closet-body">
+      <canvas id="closet-view" title="拖曳旋轉"></canvas>
+      <div>
+        <label class="name">名字<input id="player-name" maxlength="8" placeholder="幫自己取個名字，鎮上的人會叫你" autocomplete="off"></label>
+        <div class="opt-label">角色</div>
+        <div id="looks" class="looks"></div>
+        <div id="colors"></div>
+        <div class="opt-label">配件</div>
+        <div id="accessories" class="chips"></div>
+      </div>
+    </div>
+    <div class="closet-footer">
+      <span id="player-save-status" role="status">設定會自動儲存</span>
+      <button id="closet-done" class="closet-done">完成</button>
+    </div>
+  </div>
+</div>
 
 <div id="banner" class="banner"></div>
 
