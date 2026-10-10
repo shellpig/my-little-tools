@@ -152,7 +152,16 @@ const post = (x, z, r) => posts.push({ x, z, r });
 function solidOf(obj) {
   const b = new THREE.Box3().setFromObject(obj);
   solids.push({ minX: b.min.x + 0.02, maxX: b.max.x - 0.02, minZ: b.min.z + 0.02, maxZ: b.max.z - 0.02 });
+  obj.userData.solid = solids.at(-1);
   return obj;
+}
+
+// What a builder adds to the scene, and the footprints and posts it sets
+// down, so they can be moved together later.
+function collect(fn) {
+  const [c0, s0, p0] = [scene.children.length, solids.length, posts.length];
+  fn();
+  return { parts: scene.children.slice(c0), solids: solids.slice(s0), posts: posts.slice(p0) };
 }
 
 const std = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, ...opts });
@@ -382,6 +391,7 @@ async function decorateShop(building, shop) {
   const signMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, roughness: 0.6 });
   glowing.push([signMat, 0.45, shop.closes]);
   box(width * 0.72, width * 0.17, 0.02, signMat, 0, 0.45, 0.012, false, g);
+  return g;
 }
 
 // A striped cloth awning: a sloped canopy plus a short vertical valance.
@@ -590,11 +600,10 @@ function buildPark(jobs, plantMat) {
 
   const bulbMat = std(0x222222, { emissive: 0xffe0b0, emissiveIntensity: 0 });
   glowing.push([bulbMat, 3]);
-  parkLamp(-0.32, zMin + 0.15, bulbMat);
-  parkLamp(0.32, zMin + 0.15, bulbMat);
-  parkLamp(-(ring + 0.3), cz + 0.3, bulbMat);
-  parkLamp(ring + 0.3, cz - 0.3, bulbMat);
-  parkLamp(0.3, cz + ring + 0.3, bulbMat);
+  [[-0.32, zMin + 0.15], [0.32, zMin + 0.15], [-(ring + 0.3), cz + 0.3], [ring + 0.3, cz - 0.3], [0.3, cz + ring + 0.3]].forEach(([x, z], i) => {
+    const c = collect(() => parkLamp(x, z, bulbMat));
+    editable(`park-lamp:${i}`, c.parts, c);
+  });
 
   // Flowers in a ring between the fountain and the path.
   const flowerColors = [0xf28bb0, 0xf6d55c, 0xfaf3e6, 0xe2574c, 0xb58be0].map(c => new THREE.Color(c));
@@ -633,10 +642,12 @@ function buildPark(jobs, plantMat) {
   }
 
   // Trees: dense inside the park away from the paths, sparser outside it.
+  let trees = 0;
   const tree = (x, z) => {
-    post(x, z, 0.1);
+    const id = `tree:${trees++}`;
+    const c = collect(() => post(x, z, 0.1));
     jobs.push(place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
-      { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }));
+      { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }).then(obj => editable(id, [obj], c)));
   };
   for (let placed = 0; placed < 26;) {
     const x = (rand() * 2 - 1) * (xHalf - 0.25);
@@ -685,21 +696,31 @@ async function buildTown() {
   buildAlleys();
 
   // The hotel in the middle; the bus stop is outside the convenience store.
-  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => decorateHotel(solidOf(alignFront(obj)))));
+  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => {
+    const c = collect(() => decorateHotel(solidOf(alignFront(obj))));
+    editable('hotel', [obj, ...c.parts], { ...c, points: [HOTEL_DOOR] });
+  }));
   buildBusStop();
 
   // Shops and public buildings, each with a sign and the shops with awnings.
   for (const shop of [...SHOPS, ...CIVIC]) {
     const mat = paletteMaterial(commercial, shop.glow, shop.closes);
-    jobs.push(building('commercial', shop.model, shop.x, shop, mat).then(obj => decorateShop(obj, shop)));
+    jobs.push(building('commercial', shop.model, shop.x, shop, mat).then(obj => {
+      const c = collect(() => decorateShop(obj, shop));
+      editable(`shop:${shop.name}`, [obj, ...c.parts], {
+        solids: [obj.userData.solid], places: [PLACES.get(shop.name)], points: shop.name === '便利商店' ? [STORE_DOOR] : [],
+      });
+    }));
   }
 
   // Homes fill the rest of the rows.
   const townHouses = ['building-b', 'building-d', 'building-f', 'building-g'];
   const villas = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g'];
   HOMES.forEach((home, i) => {
-    if (home.villa) jobs.push(building('suburban', villas[i % villas.length], home.x, home, villaMat()));
-    else jobs.push(building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat(i)));
+    const made = home.villa
+      ? building('suburban', villas[i % villas.length], home.x, home, villaMat())
+      : building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat(i));
+    jobs.push(made.then(obj => editable(`home:${i}`, [obj], { solids: [obj.userData.solid], places: [homeDoors[i]] })));
   });
 
   // South of the main street: the park, with a gas station and a car park either side.
@@ -714,17 +735,22 @@ async function buildTown() {
     [STREETS[0], [[-3.3, -1], [-1.25, -1], [2.75, -1], [7.8, -1], [-7.8, -1], [-7.8, 1], [-2.3, 1], [1.3, 1], [4.8, 1], [8, 1]]],
     [STREETS[1], [[-3.1, 1], [2.0, 1], [-1.1, -1], [3.1, -1], [-10.15, -1], [10.45, -1]]],
   ];
+  let lampCount = 0;
   for (const [street, spots] of LAMPS) {
     for (const [x, side] of spots) {
+      const id = `lamp:${lampCount++}`;
       const z = street + side * (ROAD_HALF + 0.12);
-      jobs.push(place('roads', 'light-square', { x, z, rot: side < 0 ? Math.PI : 0, mat: roadMat }));
-      post(x, z, 0.04);
-      const head = new THREE.Vector3(x, 0.57, z - side * 0.19);
-      box(0.06, 0.015, 0.06, bulbMat, head.x, head.y, head.z);
-      const light = new THREE.PointLight(0xffbe7a, 0, 3.2, 1.6);
-      light.position.copy(head).y -= 0.04;
-      scene.add(light);
-      lamps.push(light);
+      const c = collect(() => {
+        post(x, z, 0.04);
+        const head = new THREE.Vector3(x, 0.57, z - side * 0.19);
+        box(0.06, 0.015, 0.06, bulbMat, head.x, head.y, head.z);
+        const light = new THREE.PointLight(0xffbe7a, 0, 3.2, 1.6);
+        light.position.copy(head).y -= 0.04;
+        scene.add(light);
+        lamps.push(light);
+      });
+      jobs.push(place('roads', 'light-square', { x, z, rot: side < 0 ? Math.PI : 0, mat: roadMat })
+        .then(obj => editable(id, [obj, ...c.parts], c)));
     }
   }
 
@@ -1092,8 +1118,9 @@ const PLACES = new Map([
 
 // Hand out homes in order: upstairs from the workplace, or the next free
 // town house or villa (villas are shared by families when they run out).
-const townHouseDoors = HOMES.filter(h => !h.villa).map(h => door(h.x, h));
-const villaDoors = HOMES.filter(h => h.villa).map(h => door(h.x, h));
+const homeDoors = HOMES.map(h => door(h.x, h));
+const townHouseDoors = homeDoors.filter((_, i) => !HOMES[i].villa);
+const villaDoors = homeDoors.filter((_, i) => HOMES[i].villa);
 let nextTownHouse = 0;
 let nextVilla = 0;
 function homeFor(info) {
@@ -1145,10 +1172,18 @@ class Resident extends Person {
     this.walk.play();
     this.lane = rand();
     this.strollDir = rand() < 0.5 ? 1 : -1;
-    const home = homeFor(info);
-    const stops = info.plan.map(([hour, key]) => [hour, key === 'home' ? home : PLACES.get(key)]);
-    // Each leg runs from the previous stop; the first from where yesterday ended.
-    // Going upstairs from the shop below is no walk at all.
+    this.home = homeFor(info);
+    this.plan();
+  }
+
+  // Each leg runs from the previous stop; the first from where yesterday ended.
+  // Going upstairs from the shop below is no walk at all. A stop whose
+  // building has been removed is spent at home instead.
+  plan() {
+    const stops = this.info.plan.map(([hour, key]) => {
+      const to = key === 'home' ? this.home : PLACES.get(key);
+      return [hour, to.removed ? this.home : to];
+    });
     this.legs = stops.map(([start, to], i) => {
       const from = stops[(i + stops.length - 1) % stops.length][1];
       const pts = from === to ? [to.door] : route(from, to, this.lane);
@@ -1427,7 +1462,10 @@ const smooth = THREE.MathUtils.smoothstep;
 const SKY_NIGHT = new THREE.Color(0x0b1020);
 const SKY_DAY = new THREE.Color(0x9fc6ea);
 const SKY_DUSK = new THREE.Color(0xe98a5c);
+// Dawn has no orange: the dark sky greys and pales into day.
+const SKY_DAWN = new THREE.Color(0xb7c3d6);
 const SUN_LOW = new THREE.Color(0xffa060);
+const SUN_DAWN = new THREE.Color(0xdde4f0);
 const SUN_HIGH = new THREE.Color(0xfff2de);
 const MOON = new THREE.Color(0x9bb4ff);
 const sky = new THREE.Color();
@@ -1456,12 +1494,13 @@ function applyTime(t) {
   const day = smooth(elevation, -0.12, 0.22);
   const night = 1 - day;
   const dusk = Math.exp(-((elevation / 0.18) ** 2));
+  const morning = t < 12;
 
   // The same light is the sun by day and the moon by night.
   if (elevation >= 0) {
     lightDir.set(Math.cos(angle), Math.max(elevation, 0.12), 0.6);
     sun.intensity = 3 * smooth(elevation, -0.05, 0.3);
-    sun.color.lerpColors(SUN_LOW, SUN_HIGH, smooth(elevation, 0, 0.45));
+    sun.color.lerpColors(morning ? SUN_DAWN : SUN_LOW, SUN_HIGH, smooth(elevation, 0, 0.45));
   } else {
     lightDir.set(-Math.cos(angle), Math.max(-elevation, 0.12), 0.6);
     sun.intensity = 0.45 * smooth(-elevation, 0, 0.3);
@@ -1473,7 +1512,7 @@ function applyTime(t) {
   hemi.color.setHex(0x3c4a7a).lerp(new THREE.Color(0xcfe2ff), day);
   hemi.groundColor.setHex(0x12121a).lerp(new THREE.Color(0x4a4234), day);
 
-  sky.copy(SKY_NIGHT).lerp(SKY_DAY, day).lerp(SKY_DUSK, dusk * 0.55);
+  sky.copy(SKY_NIGHT).lerp(SKY_DAY, day).lerp(morning ? SKY_DAWN : SKY_DUSK, dusk * (morning ? 0.35 : 0.55));
   scene.background = sky;
   scene.fog.color.copy(sky);
 
@@ -1834,7 +1873,7 @@ renderer.domElement.addEventListener('pointermove', e => {
 });
 renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', e => {
-  if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  if (editing || e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   aim(e);
   const targets = [
     ...wishes.clickables(),
@@ -1979,9 +2018,11 @@ function setMove(move) {
 }
 
 function togglePlay() {
+  if (editing) setEditing(false);
   player.active = !player.active;
   document.body.classList.toggle('playing', player.active);
-  $('play').textContent = player.active ? '回到俯瞰（P）' : '🚶 散步模式（P）';
+  const [ico, label] = $('play').children;
+  [ico.textContent, label.textContent] = player.active ? ['🏙', '回到俯瞰（P）'] : ['🚶', '散步模式（P）'];
   if (player.active) {
     player.pos.y = groundHeight(player.pos.x, player.pos.z);
     dressPlayer();
@@ -2292,6 +2333,314 @@ function updatePlayer(dt) {
   $('act').disabled = !label;
 }
 
+// ---------- editing the town ----------
+
+// Buildings, trees and lamps can be dragged about, turned and removed. Each
+// one lives in a pivot group with its signs, awnings and lights; its
+// footprint, posts and doors are kept in the pivot's space and put back into
+// the world after every change. Changes are saved in this browser.
+const LAYOUT_KEY = 'small-town:layout';
+const SNAP = 0.1;
+const editables = new Map();
+const undos = [];
+let editing = false;
+let selected = null;
+let drag = null;
+const floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+// The selection: a see-through cyan box round the item (cyan stands apart
+// from the warm lights at night), and a frame on the ground beneath it that is
+// never narrower than MARK_MIN, so thin things like lamps still stand out.
+const MARK_MIN = 0.5;
+const MARK_BAR = 0.04;
+const outline = new THREE.Group();
+const shell = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1),
+  new THREE.MeshBasicMaterial({ color: 0x3ec8ff, transparent: true, opacity: 0.3, depthWrite: false }));
+const frameMat = new THREE.MeshBasicMaterial({ color: 0x3ec8ff });
+const bars = [0, 1, 2, 3].map(() => new THREE.Mesh(new THREE.BoxGeometry(1, 0.012, 1), frameMat));
+outline.add(shell, ...bars);
+outline.visible = false;
+outline.traverse(o => { o.raycast = () => {}; }); // never a surface for cats or clicks
+scene.add(outline);
+function hug(item) {
+  const b = new THREE.Box3().setFromObject(item.pivot);
+  b.getCenter(shell.position);
+  b.getSize(shell.scale).addScalar(0.06);
+  const w = Math.max(shell.scale.x, MARK_MIN);
+  const d = Math.max(shell.scale.z, MARK_MIN);
+  const { x, z } = shell.position;
+  [[x, z - d / 2, w + MARK_BAR, MARK_BAR], [x, z + d / 2, w + MARK_BAR, MARK_BAR], [x - w / 2, z, MARK_BAR, d], [x + w / 2, z, MARK_BAR, d]]
+    .forEach(([bx, bz, sx, sz], i) => {
+      bars[i].position.set(bx, 0.065, bz);
+      bars[i].scale.set(sx, 1, sz);
+    });
+}
+
+function editable(id, parts, { solids: ss = [], posts: ps = [], places = [], points = [] } = {}) {
+  const box3 = new THREE.Box3();
+  for (const part of parts) box3.expandByObject(part);
+  const centre = box3.getCenter(new THREE.Vector3());
+  const pivot = new THREE.Group();
+  pivot.position.set(Math.round(centre.x / SNAP) * SNAP, 0, Math.round(centre.z / SNAP) * SNAP);
+  scene.add(pivot);
+  pivot.updateMatrixWorld(true);
+  for (const part of parts) pivot.attach(part);
+  const local = (x, z) => pivot.worldToLocal(new THREE.Vector3(x, 0, z));
+  const item = {
+    id, pivot, removed: false,
+    base: { x: pivot.position.x, z: pivot.position.z, rot: 0 },
+    solids: ss.map(s => ({ s, a: local(s.minX, s.minZ), b: local(s.maxX, s.maxZ) })),
+    posts: ps.map(p => ({ p, at: local(p.x, p.z) })),
+    places: places.map(pl => ({ pl, at: local(pl.door.x, pl.door.z) })),
+    points: points.map(v => ({ v, at: local(v.x, v.z) })),
+  };
+  pivot.userData.editable = item;
+  editables.set(id, item);
+}
+
+const stateOf = item => ({ x: item.pivot.position.x, z: item.pivot.position.z, rot: item.pivot.rotation.y, removed: item.removed });
+
+// Put an item where `state` says and bring everything that hangs off it along.
+function applyState(item, { x, z, rot, removed }) {
+  item.pivot.position.set(x, 0, z);
+  item.pivot.rotation.y = rot;
+  item.pivot.updateMatrixWorld(true);
+  const world = at => item.pivot.localToWorld(at.clone());
+  for (const { s, a, b } of item.solids) {
+    const [p, q] = [world(a), world(b)];
+    Object.assign(s, { minX: Math.min(p.x, q.x), maxX: Math.max(p.x, q.x), minZ: Math.min(p.z, q.z), maxZ: Math.max(p.z, q.z) });
+  }
+  for (const { p, at } of item.posts) Object.assign(p, { x: world(at).x, z: world(at).z });
+  for (const { v, at } of item.points) [v.x, v.z] = [world(at).x, world(at).z];
+  for (const { pl, at } of item.places) {
+    [pl.door.x, pl.door.z] = [world(at).x, world(at).z];
+    // The sidewalk it now opens onto.
+    pl.street = STREETS.reduce((a, b) => (Math.abs(pl.door.z - b) < Math.abs(pl.door.z - a) ? b : a));
+    pl.side = pl.door.z < pl.street ? -1 : 1;
+    pl.x = pl.door.x;
+  }
+  if (removed !== item.removed) {
+    item.removed = removed;
+    item.pivot.visible = !removed;
+    for (const { s } of item.solids) removed ? solids.splice(solids.indexOf(s), 1) : solids.push(s);
+    for (const { p } of item.posts) removed ? posts.splice(posts.indexOf(p), 1) : posts.push(p);
+    for (const { pl } of item.places) pl.removed = removed;
+  }
+}
+
+// Residents re-plan their walks and the cats settle onto whatever is below them now.
+function settleTown() {
+  for (const w of walkers) if (w instanceof Resident) w.plan();
+  scene.updateMatrixWorld(true);
+  for (const spot of catSpots) spot.y = surfaceY(spot.x, spot.z);
+  for (const cat of cats) if (!cat.poof) cat.obj.position.copy(cat.spot);
+}
+
+// Only what differs from the default town.
+function currentLayout() {
+  const layout = {};
+  for (const item of editables.values()) {
+    const s = stateOf(item);
+    if (s.removed || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) layout[item.id] = s;
+  }
+  return layout;
+}
+
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(currentLayout())); } catch { /* storage unavailable */ }
+}
+
+function applyLayout() {
+  let layout = {};
+  try { layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); } catch { /* storage unavailable */ }
+  for (const [id, s] of Object.entries(layout)) if (editables.has(id)) applyState(editables.get(id), s);
+  settleTown();
+}
+
+// Every change goes through here so it can be undone. An undo step is a
+// list of [item, state before], so loading a whole layout undoes in one go.
+function change(item, next) {
+  undos.push([[item, stateOf(item)]]);
+  applyState(item, next);
+  saveLayout();
+  settleTown();
+  select(item.removed ? null : item);
+}
+
+function undo() {
+  const last = undos.pop();
+  if (!last) return;
+  for (const [item, state] of last) applyState(item, state);
+  saveLayout();
+  settleTown();
+  select(last.length === 1 && !last[0][0].removed ? last[0][0] : null);
+}
+
+// Replace the whole layout: everything not mentioned goes back to its default place.
+function loadLayout(layout) {
+  const step = [];
+  for (const item of editables.values()) {
+    step.push([item, stateOf(item)]);
+    applyState(item, layout[item.id] ?? { ...item.base, removed: false });
+  }
+  undos.push(step);
+  saveLayout();
+  settleTown();
+  select(null);
+}
+
+function select(item) {
+  selected = item;
+  outline.visible = !!item;
+  if (item) hug(item);
+}
+
+function setEditing(on) {
+  if (on && player.active) togglePlay();
+  editing = on;
+  document.body.classList.toggle('editing', on);
+  const [ico, label] = $('edit').children;
+  [ico.textContent, label.textContent] = on ? ['✅', '完成編輯（B）'] : ['🛠', '編輯（B）'];
+  if (!on) {
+    select(null);
+    $('slots').hidden = true;
+  }
+}
+
+function itemAt(e) {
+  aim(e);
+  const pivots = [...editables.values()].filter(i => !i.removed).map(i => i.pivot);
+  for (const hit of raycaster.intersectObjects(pivots, true)) {
+    if (!hit.object.isMesh) continue;
+    let o = hit.object;
+    while (!o.userData.editable) o = o.parent;
+    return o.userData.editable;
+  }
+  return null;
+}
+
+// Capture the press before the camera controls see it, so dragging a
+// building moves the building instead of the view.
+addEventListener('pointerdown', e => {
+  if (!editing || e.button !== 0 || e.target !== renderer.domElement) return;
+  const item = itemAt(e);
+  if (!item) {
+    drag = { from: [e.clientX, e.clientY] };
+    return;
+  }
+  controls.enabled = false;
+  select(item);
+  const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
+  drag = { item, before: stateOf(item), offset: item.pivot.position.clone().sub(at), moved: false };
+}, true);
+addEventListener('pointermove', e => {
+  if (!drag?.item) return;
+  aim(e);
+  const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
+  if (!at) return;
+  at.add(drag.offset);
+  const x = Math.round(at.x / SNAP) * SNAP;
+  const z = Math.round(at.z / SNAP) * SNAP;
+  if (x === drag.item.pivot.position.x && z === drag.item.pivot.position.z) return;
+  drag.moved = true;
+  applyState(drag.item, { ...stateOf(drag.item), x, z });
+  hug(drag.item);
+});
+addEventListener('pointerup', e => {
+  if (!drag) return;
+  controls.enabled = true;
+  const { item, before, moved, from } = drag;
+  drag = null;
+  if (from && Math.hypot(e.clientX - from[0], e.clientY - from[1]) < 5) select(null);
+  if (!item || !moved) return;
+  const after = stateOf(item);
+  applyState(item, before);
+  change(item, after);
+});
+
+addEventListener('keydown', e => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.code === 'KeyB' && !e.repeat) setEditing(!editing);
+  if (!editing) return;
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+    e.preventDefault();
+    undo();
+    return;
+  }
+  if (!selected) return;
+  if (e.code === 'KeyR' && !e.repeat) change(selected, { ...stateOf(selected), rot: (selected.pivot.rotation.y + Math.PI / 2) % (Math.PI * 2) });
+  if (e.code === 'Delete' || e.code === 'Backspace') change(selected, { ...stateOf(selected), removed: true });
+  if (e.code === 'Escape') select(null);
+});
+// Three save slots in this browser, and layouts as .json files to keep or share.
+const SLOTS_KEY = 'small-town:layout-slots';
+const LAYOUT_FILE = { app: 'small-town', kind: 'layout', version: 1 };
+
+function readSlots() {
+  try { return JSON.parse(localStorage.getItem(SLOTS_KEY) || '[null,null,null]'); } catch { return [null, null, null]; }
+}
+
+function renderSlots() {
+  const slots = readSlots();
+  $('slot-list').replaceChildren(...slots.map((slot, i) => {
+    const row = document.createElement('div');
+    row.className = 'slot';
+    const info = document.createElement('div');
+    info.innerHTML = `<b>存檔 ${i + 1}</b><span></span>`;
+    info.querySelector('span').textContent = slot
+      ? `${new Date(slot.savedAt).toLocaleString('zh-TW', { hour12: false })} · ${Object.keys(slot.layout).length} 處變動`
+      : '空';
+    const save = document.createElement('button');
+    save.textContent = '存到這裡';
+    save.onclick = () => {
+      if (slot && !confirm(`覆蓋存檔 ${i + 1}？`)) return;
+      slots[i] = { savedAt: Date.now(), layout: currentLayout() };
+      try { localStorage.setItem(SLOTS_KEY, JSON.stringify(slots)); } catch { /* storage unavailable */ }
+      renderSlots();
+    };
+    const load = document.createElement('button');
+    load.textContent = '讀取';
+    load.disabled = !slot;
+    load.onclick = () => loadLayout(slot.layout);
+    row.append(info, save, load);
+    return row;
+  }));
+}
+
+$('edit-slots').addEventListener('click', () => {
+  $('slots').hidden = !$('slots').hidden;
+  if (!$('slots').hidden) renderSlots();
+});
+$('slots-close').addEventListener('click', () => { $('slots').hidden = true; });
+$('layout-export').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ ...LAYOUT_FILE, layout: currentLayout() }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'small-town-layout.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+$('layout-import').addEventListener('click', () => $('layout-file').click());
+$('layout-file').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== LAYOUT_FILE.app || data.kind !== LAYOUT_FILE.kind || typeof data.layout !== 'object') throw new Error();
+    loadLayout(data.layout);
+  } catch {
+    alert('這不是小鎮的佈局檔。');
+  }
+});
+
+$('edit').addEventListener('click', e => { setEditing(!editing); e.currentTarget.blur(); });
+$('edit-undo').addEventListener('click', undo);
+$('edit-reset').addEventListener('click', () => {
+  if (!confirm('還原成預設的小鎮？所有搬動和刪除都會清除。')) return;
+  try { localStorage.removeItem(LAYOUT_KEY); } catch { /* storage unavailable */ }
+  location.reload();
+});
+
 // ---------- main loop ----------
 
 const clock = new THREE.Clock();
@@ -2315,6 +2664,7 @@ function frame() {
 
 await Promise.all([buildTown(), addPeople(), addTraffic()]);
 addCats();
+applyLayout();
 addWishes();
 await addWardrobe();
 $('loading').classList.add('done');

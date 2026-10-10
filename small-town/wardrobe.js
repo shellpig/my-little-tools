@@ -15,6 +15,7 @@ export const ACCESSORIES = [
   { id: '', label: '無' },
   { id: 'glasses', label: '眼鏡', glb: 'aid-glasses' },
   { id: 'sunglasses', label: '墨鏡', glb: 'aid-sunglasses' },
+  { id: 'facemask', label: '口罩' },
   { id: 'mask', label: '氧氣鼻管', glb: 'aid-mask' },
   { id: 'cap', label: '棒球帽' },
   { id: 'beanie', label: '毛帽' },
@@ -138,7 +139,8 @@ function remap(gltf, look) {
   return { geos, copies: [...copies.values()] };
 }
 
-function hatMesh(id) {
+// Hats and the face mask, built from boxes.
+function blockMesh(id) {
   const group = new THREE.Group();
   const mat = color => new THREE.MeshStandardMaterial({ color, roughness: 0.8 });
   const box = (w, h, d, color, x, y, z) => {
@@ -165,6 +167,12 @@ function hatMesh(id) {
       box(0.06, 0.08, 0.06, '#f2c14e', x, 0.09, z);
     }
     box(0.06, 0.06, 0.02, '#e8534a', 0, 0.03, 0.175);
+  } else if (id === 'facemask') {
+    // In the head bone's space: over the mouth on the face plate, with
+    // loops running back along the cheeks to the ears.
+    box(0.3, 0.13, 0.02, '#f4f6f8', 0, 0.075, 0.17);
+    for (const y of [0.05, 0.1]) box(0.29, 0.008, 0.022, '#cfe0ee', 0, y, 0.171);
+    for (const x of [-0.232, 0.232]) box(0.012, 0.014, 0.16, '#e6eaee', x, 0.085, 0.09);
   }
   return group;
 }
@@ -229,9 +237,9 @@ export function createWardrobe(characters, aids) {
       else thing.position.set(0, 0.105, 0.1);
       thing.scale.setScalar(item.id === 'mask' ? 1.05 : 1.2);
     } else {
-      // Pulled down over the top of the head; buns and spikes poke through.
-      thing = hatMesh(item.id);
-      thing.position.set(0, HEAD_TOP - HEAD_Y - 0.06, 0);
+      // Hats are pulled down over the top of the head; buns and spikes poke through.
+      thing = blockMesh(item.id);
+      if (item.id !== 'facemask') thing.position.set(0, HEAD_TOP - HEAD_Y - 0.06, 0);
     }
     thing.name = 'accessory';
     thing.traverse(o => { if (o.isMesh) o.castShadow = true; });

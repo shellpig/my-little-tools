@@ -74,6 +74,9 @@
     background: var(--panel); color: var(--text); font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
     backdrop-filter: blur(12px); }
   .play:hover { background: rgba(40, 46, 62, .85); }
+  /* Same width and a fixed slot for the icon, so the labels line up. */
+  .play { min-width: 150px; text-align: left; }
+  .play .ico { display: inline-block; width: 1.5em; text-align: center; }
   body.playing .play { background: #f3f5f9; color: #111; }
   .prompt { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px;
     background: rgba(16, 20, 30, .8); color: var(--text); font-size: 14px; pointer-events: none; }
@@ -91,6 +94,30 @@
     body.playing .prompt { display: none; }
   }
   .dress { top: 156px; }
+  .edit { top: 200px; }
+  body.editing .edit { background: #f3f5f9; color: #111; }
+  .edit-bar { position: fixed; left: 50%; bottom: 24px; z-index: 4; display: none; align-items: center; gap: 10px;
+    transform: translateX(-50%); padding: 8px 10px 8px 16px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--panel); backdrop-filter: blur(12px); font-size: 13px; white-space: nowrap; }
+  body.editing .edit-bar { display: flex; }
+  .edit-bar button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, .06);
+    color: var(--text); font-family: inherit; font-size: 13px; cursor: pointer; }
+  .edit-bar button:hover { background: rgba(255, 255, 255, .14); }
+  .slots { position: fixed; left: 50%; bottom: 76px; z-index: 6; width: min(380px, calc(100vw - 32px)); box-sizing: border-box;
+    transform: translateX(-50%); padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px;
+    background: rgba(16, 20, 30, .94); }
+  .slots-head { display: flex; align-items: center; margin-bottom: 8px; font-size: 15px; }
+  .slots-head .toggle { margin-left: auto; }
+  .slot { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .slot div { flex: 1; min-width: 0; }
+  .slot b { display: block; font-size: 14px; }
+  .slot span { font-size: 12px; color: var(--dim); }
+  .slots-foot { display: flex; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .slots-foot button { flex: 1; }
+  .slot button, .slots-foot button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, .06);
+    color: var(--text); font-family: inherit; font-size: 13px; cursor: pointer; }
+  .slot button:hover, .slots-foot button:hover { background: rgba(255, 255, 255, .14); }
+  .slot button:disabled { opacity: .4; cursor: default; }
   .closet { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; background: rgba(5, 8, 16, .45); }
   .closet[hidden] { display: none; }
   .closet-card { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box;
@@ -134,6 +161,8 @@
     .cats { top: auto; bottom: 96px; right: 12px; width: 200px; }
     .play { left: 16px; top: 100px; }
     .dress { top: 144px; }
+    .edit { top: 188px; }
+    .edit-bar span { display: none; }
     .closet-body { grid-template-columns: 1fr; }
     #closet-view { height: 220px; }
     body.playing .cats { display: none; }
@@ -185,8 +214,24 @@
   <div class="cats-total" id="cat-total"></div>
 </div>
 
-<button id="play" class="play">🚶 散步模式（P）</button>
-<button id="dress" class="play dress">👕 換裝（C）</button>
+<button id="play" class="play"><span class="ico">🚶</span><span>散步模式（P）</span></button>
+<button id="dress" class="play dress"><span class="ico">👕</span><span>換裝（C）</span></button>
+<button id="edit" class="play edit"><span class="ico">🛠</span><span>編輯（B）</span></button>
+<div class="edit-bar">
+  <span>拖曳移動建築、樹、路燈 · R 旋轉 · Delete 刪除 · Ctrl+Z 復原</span>
+  <button id="edit-undo">復原</button>
+  <button id="edit-slots">💾 存檔</button>
+  <button id="edit-reset">還原預設</button>
+</div>
+<div id="slots" class="slots" hidden>
+  <div class="slots-head"><b>小鎮佈局存檔</b><button id="slots-close" class="toggle" title="關閉">✕</button></div>
+  <div id="slot-list"></div>
+  <div class="slots-foot">
+    <button id="layout-export">匯出檔案</button>
+    <button id="layout-import">匯入檔案</button>
+    <input id="layout-file" type="file" accept=".json,application/json" hidden>
+  </div>
+</div>
 <div id="prompt" class="prompt" hidden></div>
 <div id="stick" class="stick"><div class="knob"></div></div>
 <button id="act" class="act" disabled>互動</button>
