@@ -274,6 +274,9 @@ function pastel(textures, [top, bottom]) {
   return { ...textures, map: paletteTexture(c) };
 }
 
+// Palettes and shared materials from building the town, kept for adding to it.
+const kit = {};
+
 function paletteMaterial(textures, nightGlow, lightsOut, keep = 0) {
   const mat = new THREE.MeshStandardMaterial({ ...textures, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.8 });
   glowing.push([mat, nightGlow, lightsOut, keep]);
@@ -677,6 +680,7 @@ async function buildTown() {
   const roadMat = paletteMaterial(roads, 0);
   // About one town house in four has pastel walls.
   const pastels = PASTELS.map(p => pastel(commercial, p));
+  Object.assign(kit, { commercial, suburban, pastels, plantMat: houseMat, roadMat });
   const townHouseMat = i => paletteMaterial(i % 7 === 2 || i % 7 === 5 ? pastels[i % 3] : commercial,
     [1.4, 0.7, 2.2][Math.floor(rand() * 3)], bedtime(21.5, 2.5), rand() * 0.15);
   const villaMat = () => paletteMaterial(suburban, 0.9 + rand() * 0.6, bedtime(21, 1), rand() * 0.1);
@@ -732,32 +736,34 @@ async function buildTown() {
   buildParkingLot();
 
   // Street lamps on both streets, with a real light under each head.
-  const bulbMat = std(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
-  glowing.push([bulbMat, 6]);
+  kit.bulbMat = std(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
+  glowing.push([kit.bulbMat, 6]);
   const LAMPS = [
     [STREETS[0], [[-3.3, -1], [-1.25, -1], [2.75, -1], [7.8, -1], [-7.8, -1], [-7.8, 1], [-2.3, 1], [1.3, 1], [4.8, 1], [8, 1]]],
     [STREETS[1], [[-3.1, 1], [2.0, 1], [-1.1, -1], [3.1, -1], [-10.15, -1], [10.45, -1]]],
   ];
   let lampCount = 0;
   for (const [street, spots] of LAMPS) {
-    for (const [x, side] of spots) {
-      const id = `lamp:${lampCount++}`;
-      const z = street + side * (ROAD_HALF + 0.12);
-      const c = collect(() => {
-        post(x, z, 0.04);
-        const head = new THREE.Vector3(x, 0.57, z - side * 0.19);
-        box(0.06, 0.015, 0.06, bulbMat, head.x, head.y, head.z);
-        const light = new THREE.PointLight(0xffbe7a, 0, 3.2, 1.6);
-        light.position.copy(head).y -= 0.04;
-        scene.add(light);
-        lamps.push(light);
-      });
-      jobs.push(place('roads', 'light-square', { x, z, rot: side < 0 ? Math.PI : 0, mat: roadMat })
-        .then(obj => editable(id, [obj, ...c.parts], c)));
-    }
+    for (const [x, side] of spots) jobs.push(streetLamp(`lamp:${lampCount++}`, x, street + side * (ROAD_HALF + 0.12), side));
   }
 
   await Promise.all(jobs);
+}
+
+// A street lamp with a real light under its head, which hangs toward −z
+// (side +1) or +z (side −1). The curved one stands a little taller.
+function streetLamp(id, x, z, side, model = 'light-square') {
+  const c = collect(() => {
+    post(x, z, 0.04);
+    const head = new THREE.Vector3(x, model === 'light-curved' ? 0.64 : 0.57, z - side * 0.19);
+    box(0.06, 0.015, 0.06, kit.bulbMat, head.x, head.y, head.z);
+    const light = new THREE.PointLight(0xffbe7a, 0, 3.2, 1.6);
+    light.position.copy(head).y -= 0.04;
+    scene.add(light);
+    lamps.push(light);
+  });
+  return place('roads', model, { x, z, rot: side < 0 ? Math.PI : 0, mat: kit.roadMat })
+    .then(obj => editable(id, [obj, ...c.parts], c));
 }
 
 // The two lanes: paved strips between the streets and on beyond them, with
@@ -2397,6 +2403,7 @@ function editable(id, parts, { solids: ss = [], posts: ps = [], places = [], poi
   };
   pivot.userData.editable = item;
   editables.set(id, item);
+  return item;
 }
 
 const stateOf = item => ({ x: item.pivot.position.x, z: item.pivot.position.z, rot: item.pivot.rotation.y, removed: item.removed });
@@ -2442,7 +2449,12 @@ function currentLayout() {
   const layout = {};
   for (const item of editables.values()) {
     const s = stateOf(item);
-    if (s.removed || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) layout[item.id] = s;
+    // Added things are kept with how to build them again, unless removed.
+    if (item.add) {
+      if (!s.removed && item !== placing) layout[item.id] = { ...s, add: item.add };
+    } else if (s.removed || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) {
+      layout[item.id] = s;
+    }
   }
   return layout;
 }
@@ -2451,10 +2463,13 @@ function saveLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(currentLayout())); } catch { /* storage unavailable */ }
 }
 
-function applyLayout() {
+async function applyLayout() {
   let layout = {};
   try { layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); } catch { /* storage unavailable */ }
-  for (const [id, s] of Object.entries(layout)) if (editables.has(id)) applyState(editables.get(id), s);
+  for (const [id, s] of Object.entries(layout)) {
+    const item = editables.get(id) ?? (s.add ? await buildAdded(id, s.add) : null);
+    if (item) applyState(item, s);
+  }
   settleTown();
 }
 
@@ -2478,11 +2493,18 @@ function undo() {
 }
 
 // Replace the whole layout: everything not mentioned goes back to its default place.
-function loadLayout(layout) {
+async function loadLayout(layout) {
+  cancelPlacing();
+  // Build what the layout adds first, hidden, so undo hides it again.
+  for (const [id, s] of Object.entries(layout)) {
+    if (!s.add || editables.has(id)) continue;
+    const item = await buildAdded(id, s.add);
+    applyState(item, { ...stateOf(item), removed: true });
+  }
   const step = [];
   for (const item of editables.values()) {
     step.push([item, stateOf(item)]);
-    applyState(item, layout[item.id] ?? { ...item.base, removed: false });
+    applyState(item, layout[item.id] ?? (item.add ? { ...stateOf(item), removed: true } : { ...item.base, removed: false }));
   }
   undos.push(step);
   saveLayout();
@@ -2503,8 +2525,10 @@ function setEditing(on) {
   const [ico, label] = $('edit').children;
   [ico.textContent, label.textContent] = on ? ['✅', '完成編輯（B）'] : ['🛠', '編輯（B）'];
   if (!on) {
+    cancelPlacing();
     select(null);
     $('slots').hidden = true;
+    $('add-panel').hidden = true;
   }
 }
 
@@ -2523,7 +2547,15 @@ function itemAt(e) {
 // Capture the press before the camera controls see it, so dragging a
 // building moves the building instead of the view.
 addEventListener('pointerdown', e => {
-  if (!editing || e.button !== 0 || e.target !== renderer.domElement) return;
+  if (!editing || e.target !== renderer.domElement) return;
+  if (placing) {
+    if (e.button === 2) return cancelPlacing();
+    if (e.button !== 0) return;
+    controls.enabled = false;
+    drag = {};
+    return putDown();
+  }
+  if (e.button !== 0) return;
   const item = itemAt(e);
   if (!item) {
     drag = { from: [e.clientX, e.clientY] };
@@ -2535,10 +2567,17 @@ addEventListener('pointerdown', e => {
   drag = { item, before: stateOf(item), offset: item.pivot.position.clone().sub(at), moved: false };
 }, true);
 addEventListener('pointermove', e => {
-  if (!drag?.item) return;
+  if (!editing || e.target !== renderer.domElement) return;
   aim(e);
   const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
   if (!at) return;
+  pointerFloor = at.clone();
+  if (placing) {
+    applyState(placing, { ...stateOf(placing), x: Math.round(at.x / SNAP) * SNAP, z: Math.round(at.z / SNAP) * SNAP });
+    hug(placing);
+    return;
+  }
+  if (!drag?.item) return;
   at.add(drag.offset);
   const x = Math.round(at.x / SNAP) * SNAP;
   const z = Math.round(at.z / SNAP) * SNAP;
@@ -2563,6 +2602,14 @@ addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyB' && !e.repeat) setEditing(!editing);
   if (!editing) return;
+  if (placing) {
+    if (e.code === 'KeyR' && !e.repeat) {
+      applyState(placing, { ...stateOf(placing), rot: (placing.pivot.rotation.y + Math.PI / 2) % (Math.PI * 2) });
+      hug(placing);
+    }
+    if (e.code === 'Escape' || ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ')) cancelPlacing();
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
     e.preventDefault();
     undo();
@@ -2573,6 +2620,147 @@ addEventListener('keydown', e => {
   if (e.code === 'Delete' || e.code === 'Backspace') change(selected, { ...stateOf(selected), removed: true });
   if (e.code === 'Escape') select(null);
 });
+// ---------- adding to the town ----------
+
+// Pick a type and a model in the panel; the new thing follows the pointer
+// until a click on the ground puts it down. Added things are saved in the
+// layout with what is needed to build them again.
+const BUILDINGS = [...'abcdefghijklmn'].map(c => `building-${c}`);
+const ADD_TYPES = [
+  { type: 'house', label: '住家', pack: 'commercial', models: BUILDINGS },
+  { type: 'villa', label: '別墅', pack: 'suburban', models: [...'abcdefghijklmnopqrstu'].map(c => `building-type-${c}`) },
+  { type: 'shop', label: '商店', pack: 'commercial', models: BUILDINGS },
+  { type: 'tree', label: '樹', pack: 'suburban', models: ['tree-large', 'tree-small'] },
+  { type: 'lamp', label: '路燈', pack: 'roads', models: ['light-square', 'light-curved'] },
+];
+// Wall colours: white, or one of the pastels.
+const WALLS = [['白色', -1], ['淡藍', 0], ['淡綠', 1], ['淡黃', 2]];
+const SHOP_THEMES = [
+  { bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a },
+  { bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f },
+  { bg: '#f7f7f4', fg: '#1d6fd6', awning: 0x2c6fc4 },
+  { bg: '#fff3c4', fg: '#8a4b00', awning: 0xf2c14e },
+  { bg: '#f4e8ef', fg: '#c0466e', awning: 0xe58fb0 },
+  { bg: '#3d2f5c', fg: '#f3e6ff', awning: 0x7a5cc4 },
+];
+let placing = null;
+let placingTicket = null;
+let pointerFloor = null;
+const addChoice = { type: 'house', wall: -1, theme: 0 };
+
+// Built at the origin facing +z; its pivot then carries it into place.
+async function buildAdded(id, add) {
+  let item;
+  if (add.type === 'tree') {
+    const c = collect(() => post(0, 0, 0.1));
+    const obj = await place('suburban', add.model, { scale: 1.25, mat: kit.plantMat });
+    item = editable(id, [obj], c);
+  } else if (add.type === 'lamp') {
+    item = await streetLamp(id, 0, 0, 1, add.model);
+  } else {
+    const villa = add.type === 'villa';
+    const walls = add.wall >= 0 ? kit.pastels[add.wall] : kit.commercial;
+    const mat = villa
+      ? paletteMaterial(kit.suburban, 0.9 + Math.random() * 0.6, 21 + Math.random(), Math.random() * 0.1)
+      : paletteMaterial(walls, add.type === 'shop' ? 1.3 : [1.4, 0.7, 2.2][Math.floor(Math.random() * 3)],
+        add.type === 'shop' ? 22 : (21.5 + Math.random() * 5) % 24, add.type === 'shop' ? 0 : Math.random() * 0.15);
+    const obj = solidOf(await place(villa ? 'suburban' : 'commercial', add.model, { mat }));
+    const c = add.type === 'shop'
+      ? collect(() => decorateShop(obj, { x: 0, facing: 1, name: add.name, ...SHOP_THEMES[add.theme], closes: 22 }))
+      : { parts: [] };
+    item = editable(id, [obj, ...c.parts], { solids: [obj.userData.solid] });
+  }
+  item.add = add;
+  return item;
+}
+
+async function startPlacing(add) {
+  cancelPlacing();
+  const ticket = placingTicket = {};
+  const item = await buildAdded(`add:${Date.now().toString(36)}`, add);
+  // Something else was picked, or editing ended, while the model loaded.
+  if (ticket !== placingTicket || !editing) return discard(item);
+  placing = item;
+  const at = pointerFloor ?? controls.target;
+  applyState(item, { x: Math.round(at.x / SNAP) * SNAP, z: Math.round(at.z / SNAP) * SNAP, rot: 0, removed: false });
+  select(item);
+  $('prompt').textContent = '點地面放下 · R 旋轉 · Esc 或右鍵取消';
+  $('prompt').hidden = false;
+}
+
+function putDown() {
+  const item = placing;
+  placing = null;
+  $('prompt').hidden = true;
+  undos.push([[item, { ...stateOf(item), removed: true }]]);
+  saveLayout();
+  settleTown();
+  select(item);
+}
+
+function cancelPlacing() {
+  placingTicket = null;
+  if (!placing) return;
+  discard(placing);
+  placing = null;
+  $('prompt').hidden = true;
+  select(null);
+}
+
+// Gone for good: never placed, so nothing can bring it back.
+function discard(item) {
+  applyState(item, { ...stateOf(item), removed: true });
+  scene.remove(item.pivot);
+  editables.delete(item.id);
+}
+
+function chip(label, on, onclick) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.className = on ? 'on' : '';
+  b.onclick = onclick;
+  return b;
+}
+
+function renderAddPanel() {
+  const t = ADD_TYPES.find(a => a.type === addChoice.type);
+  const restyle = change => () => { Object.assign(addChoice, change); renderAddPanel(); };
+  $('add-tabs').replaceChildren(...ADD_TYPES.map(a => chip(a.label, a === t, restyle({ type: a.type }))));
+  $('add-walls').hidden = t.pack !== 'commercial';
+  $('add-walls-row').replaceChildren(...WALLS.map(([label, w]) => chip(label, addChoice.wall === w, restyle({ wall: w }))));
+  $('add-shop').hidden = t.type !== 'shop';
+  $('add-themes').replaceChildren(...SHOP_THEMES.map((theme, i) => {
+    const b = document.createElement('button');
+    b.className = addChoice.theme === i ? 'on' : '';
+    b.style.background = `#${theme.awning.toString(16).padStart(6, '0')}`;
+    b.onclick = restyle({ theme: i });
+    return b;
+  }));
+  $('add-models').replaceChildren(...t.models.map(model => {
+    const b = document.createElement('button');
+    b.title = model;
+    b.innerHTML = `<img src="${ASSETS}/${t.pack}/Previews/${model}.png" alt="">`;
+    b.onclick = () => {
+      const add = { type: t.type, model };
+      if (t.pack === 'commercial' && addChoice.wall >= 0) add.wall = addChoice.wall;
+      if (t.type === 'shop') Object.assign(add, { name: $('add-name').value.trim() || '新商店', theme: addChoice.theme });
+      startPlacing(add);
+    };
+    return b;
+  }));
+}
+
+$('edit-add').addEventListener('click', () => {
+  $('add-panel').hidden = !$('add-panel').hidden;
+  if (!$('add-panel').hidden) renderAddPanel();
+  else cancelPlacing();
+});
+$('add-close').addEventListener('click', () => {
+  $('add-panel').hidden = true;
+  cancelPlacing();
+});
+renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preventDefault(); });
+
 // Three save slots in this browser, and layouts as .json files to keep or share.
 const SLOTS_KEY = 'small-town:layout-slots';
 const LAYOUT_FILE = { app: 'small-town', kind: 'layout', version: 1 };
@@ -2666,7 +2854,7 @@ function frame() {
 
 await Promise.all([buildTown(), addPeople(), addTraffic()]);
 addCats();
-applyLayout();
+await applyLayout();
 addWishes();
 await addWardrobe();
 $('loading').classList.add('done');
