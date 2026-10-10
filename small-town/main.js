@@ -687,14 +687,10 @@ async function buildTown() {
 
   // Ground, then each street's sidewalks, curbs and road.
   box(120, 0.1, 120, std(0x667a52), 0, -0.05, 0);
-  const pavement = std(0xb3ada3);
-  const curb = std(0xd2ccc0);
+  Object.assign(kit, { pavement: std(0xb3ada3), curb: std(0xd2ccc0) });
+  paveSidewalks();
   const jobs = [];
   for (const street of STREETS) {
-    for (const side of [-1, 1]) {
-      box(60, 0.05, SIDEWALK, pavement, 0, 0.025, street + side * (ROAD_HALF + SIDEWALK / 2));
-      box(60, 0.06, 0.06, curb, 0, 0.03, street + side * (ROAD_HALF + 0.03));
-    }
     // Road tiles are 1 × 1; stretch them across to the two-lane width.
     for (let x = -20; x <= 20; x++) {
       jobs.push(place('roads', 'road-straight', { x, z: street, scale: [1, 1, ROAD_HALF * 2], mat: roadMat }));
@@ -1960,6 +1956,8 @@ const overview = { pos: camera.position.clone(), target: controls.target.clone()
 
 // Road, sidewalks and park paths sit a little above the grass.
 function groundHeight(x, z) {
+  const tile = tiles.get(cellKey(Math.round(x / CELL), Math.round(z / CELL)));
+  if (tile) return tile === 'walk' ? 0.05 : 0.02;
   for (const street of STREETS) {
     const d = Math.abs(z - street);
     if (d < ROAD_HALF) return 0.02;
@@ -2447,6 +2445,7 @@ function settleTown() {
 // Only what differs from the default town.
 function currentLayout() {
   const layout = {};
+  if (tiles.size) layout['#tiles'] = Object.fromEntries(tiles);
   for (const item of editables.values()) {
     const s = stateOf(item);
     // Added things are kept with how to build them again, unless removed.
@@ -2470,6 +2469,7 @@ async function applyLayout() {
     const item = editables.get(id) ?? (s.add ? await buildAdded(id, s.add) : null);
     if (item) applyState(item, s);
   }
+  setTiles(layout['#tiles']);
   settleTown();
 }
 
@@ -2483,9 +2483,11 @@ function change(item, next) {
   select(item.removed ? null : item);
 }
 
+// A step may also carry the painted cells from before it.
 function undo() {
   const last = undos.pop();
   if (!last) return;
+  if (last.tiles) setTiles(Object.fromEntries(last.tiles));
   for (const [item, state] of last) applyState(item, state);
   saveLayout();
   settleTown();
@@ -2501,7 +2503,8 @@ async function loadLayout(layout) {
     const item = await buildAdded(id, s.add);
     applyState(item, { ...stateOf(item), removed: true });
   }
-  const step = [];
+  const step = Object.assign([], { tiles: new Map(tiles) });
+  setTiles(layout['#tiles']);
   for (const item of editables.values()) {
     step.push([item, stateOf(item)]);
     applyState(item, layout[item.id] ?? (item.add ? { ...stateOf(item), removed: true } : { ...item.base, removed: false }));
@@ -2525,6 +2528,7 @@ function setEditing(on) {
   const [ico, label] = $('edit').children;
   [ico.textContent, label.textContent] = on ? ['✅', '完成編輯（B）'] : ['🛠', '編輯（B）'];
   if (!on) {
+    setBrush(null);
     cancelPlacing();
     select(null);
     $('slots').hidden = true;
@@ -2548,6 +2552,17 @@ function itemAt(e) {
 // building moves the building instead of the view.
 addEventListener('pointerdown', e => {
   if (!editing || e.target !== renderer.domElement) return;
+  if (brush) {
+    if (e.button === 2) return setBrush(null);
+    if (e.button !== 0) return;
+    controls.enabled = false;
+    drag = {};
+    stroke = new Map(tiles);
+    aim(e);
+    const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
+    if (at) paintAt(at);
+    return;
+  }
   if (placing) {
     if (e.button === 2) return cancelPlacing();
     if (e.button !== 0) return;
@@ -2572,6 +2587,7 @@ addEventListener('pointermove', e => {
   const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
   if (!at) return;
   pointerFloor = at.clone();
+  if (brush) return paintAt(at);
   if (placing) {
     applyState(placing, { ...stateOf(placing), x: Math.round(at.x / SNAP) * SNAP, z: Math.round(at.z / SNAP) * SNAP });
     hug(placing);
@@ -2587,6 +2603,7 @@ addEventListener('pointermove', e => {
   hug(drag.item);
 });
 addEventListener('pointerup', e => {
+  if (stroke) endStroke();
   if (!drag) return;
   controls.enabled = true;
   const { item, before, moved, from } = drag;
@@ -2602,6 +2619,7 @@ addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyB' && !e.repeat) setEditing(!editing);
   if (!editing) return;
+  if (brush && e.code === 'Escape') return setBrush(null);
   if (placing) {
     if (e.code === 'KeyR' && !e.repeat) {
       applyState(placing, { ...stateOf(placing), rot: (placing.pivot.rotation.y + Math.PI / 2) % (Math.PI * 2) });
@@ -2632,7 +2650,9 @@ const ADD_TYPES = [
   { type: 'shop', label: '商店', pack: 'commercial', models: BUILDINGS },
   { type: 'tree', label: '樹', pack: 'suburban', models: ['tree-large', 'tree-small'] },
   { type: 'lamp', label: '路燈', pack: 'roads', models: ['light-square', 'light-curved'] },
+  { type: 'paving', label: '道路', models: [] },
 ];
+const BRUSHES = [['road', '馬路'], ['walk', '人行道'], ['erase', '清除']];
 // Wall colours: white, or one of the pastels.
 const WALLS = [['白色', -1], ['淡藍', 0], ['淡綠', 1], ['淡黃', 2]];
 const SHOP_THEMES = [
@@ -2675,6 +2695,7 @@ async function buildAdded(id, add) {
 }
 
 async function startPlacing(add) {
+  setBrush(null);
   cancelPlacing();
   const ticket = placingTicket = {};
   const item = await buildAdded(`add:${Date.now().toString(36)}`, add);
@@ -2724,7 +2745,14 @@ function chip(label, on, onclick) {
 
 function renderAddPanel() {
   const t = ADD_TYPES.find(a => a.type === addChoice.type);
-  const restyle = change => () => { Object.assign(addChoice, change); renderAddPanel(); };
+  const restyle = change => () => {
+    Object.assign(addChoice, change);
+    if (change.type && change.type !== 'paving') setBrush(null);
+    renderAddPanel();
+  };
+  $('add-paving').hidden = t.type !== 'paving';
+  $('add-model-box').hidden = t.type === 'paving';
+  $('add-brushes').replaceChildren(...BRUSHES.map(([b, label]) => chip(label, brush === b, () => setBrush(brush === b ? null : b))));
   $('add-tabs').replaceChildren(...ADD_TYPES.map(a => chip(a.label, a === t, restyle({ type: a.type }))));
   $('add-walls').hidden = t.pack !== 'commercial';
   $('add-walls-row').replaceChildren(...WALLS.map(([label, w]) => chip(label, addChoice.wall === w, restyle({ wall: w }))));
@@ -2760,6 +2788,164 @@ $('add-close').addEventListener('click', () => {
   cancelPlacing();
 });
 renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preventDefault(); });
+
+// ---------- paving ----------
+
+// Roads and pavements painted on a grid of road-wide cells lined up with the
+// main street. A road cell picks the Kenney piece that joins its neighbours,
+// the old streets included, and a road crossing a street's pavement cuts it.
+// Cells inside a street can't be painted; the back street sits half a cell
+// off the grid, so the cells beside it overlap it and stop at its edge.
+const CELL = ROAD_HALF * 2;
+const tiles = new Map(); // "i,j" → 'road' | 'walk'
+const tileGroup = new THREE.Group();
+const kerbs = new THREE.Group();
+scene.add(tileGroup, kerbs);
+const cellKey = (i, j) => `${i},${j}`;
+const NORTH = 1;
+const EAST = 2;
+const SOUTH = 4;
+const WEST = 8;
+// A quarter turn (+y rotation) takes east to north, north to west, and so on.
+const quarter = m => (m & EAST ? NORTH : 0) | (m & NORTH ? WEST : 0) | (m & WEST ? SOUTH : 0) | (m & SOUTH ? EAST : 0);
+// Each piece and the sides it opens to, unturned.
+const PIECES = [['road-square', 0], ['road-end', EAST], ['road-straight', EAST | WEST], ['road-bend', SOUTH | WEST],
+  ['road-intersection', EAST | SOUTH | WEST], ['road-crossroad', NORTH | EAST | SOUTH | WEST]];
+const pieceFor = new Map(); // sides → [piece, quarter turns]
+for (const [piece, open] of PIECES) {
+  for (let k = 0, m = open; k < 4; k++, m = quarter(m)) if (!pieceFor.has(m)) pieceFor.set(m, [piece, k]);
+}
+const streetGap = z => Math.min(...STREETS.map(s => Math.abs(z - s)));
+const paveable = j => streetGap(j * CELL) > ROAD_HALF - 1e-6;
+const halfCell = j => streetGap(j * CELL) < CELL - 1e-6;
+// Does a street lie on or across this line of z?
+const streetAt = z => STREETS.some(s => Math.abs(z - s) <= ROAD_HALF + 1e-6);
+
+function roadSides(i, j) {
+  const road = (a, b) => tiles.get(cellKey(a, b)) === 'road';
+  const z = j * CELL;
+  return (road(i, j - 1) || streetAt(z - ROAD_HALF) ? NORTH : 0) | (road(i + 1, j) ? EAST : 0)
+    | (road(i, j + 1) || streetAt(z + ROAD_HALF) ? SOUTH : 0) | (road(i - 1, j) ? WEST : 0);
+}
+
+function roadPiece(gltf) {
+  const obj = gltf.scene.clone(true);
+  obj.traverse(o => {
+    if (!o.isMesh) return;
+    o.material = kit.roadMat;
+    o.receiveShadow = true;
+  });
+  return obj;
+}
+
+let paveJob = 0;
+async function drawTiles() {
+  const job = ++paveJob;
+  const gltfs = Object.fromEntries(await Promise.all(PIECES.map(async ([p]) => [p, await model('roads', p)])));
+  if (job !== paveJob) return;
+  tileGroup.clear();
+  for (const [key, kind] of tiles) {
+    const [i, j] = key.split(',').map(Number);
+    const x = i * CELL;
+    const z = j * CELL;
+    if (kind === 'walk') {
+      box(CELL, 0.05, CELL, kit.pavement, x, 0.025, z, false, tileGroup);
+      continue;
+    }
+    let obj;
+    if (halfCell(j)) {
+      // Only the part outside the street: a straight stub running into it.
+      const s = STREETS.reduce((a, b) => (Math.abs(z - b) < Math.abs(z - a) ? b : a));
+      const near = s + Math.sign(z - s) * ROAD_HALF;
+      const far = z + Math.sign(z - s) * ROAD_HALF;
+      obj = roadPiece(gltfs['road-straight']);
+      obj.position.set(x, 0, (near + far) / 2);
+      obj.rotation.y = Math.PI / 2;
+      obj.scale.set(Math.abs(far - near), 1, CELL);
+    } else {
+      const [piece, k] = pieceFor.get(roadSides(i, j));
+      obj = roadPiece(gltfs[piece]);
+      obj.position.set(x, 0, z);
+      obj.rotation.y = k * Math.PI / 2;
+      obj.scale.setScalar(CELL);
+    }
+    tileGroup.add(obj);
+  }
+}
+
+// The streets' pavements and curbs, with a gap wherever a road crosses.
+function paveSidewalks() {
+  kerbs.clear();
+  for (const street of STREETS) {
+    for (const side of [-1, 1]) {
+      const inner = street + side * ROAD_HALF;
+      const outer = street + side * FRONTAGE;
+      const gaps = [...tiles].filter(([, kind]) => kind === 'road').map(([key]) => key.split(',').map(Number))
+        .filter(([, j]) => Math.min(inner, outer) < j * CELL + ROAD_HALF && Math.max(inner, outer) > j * CELL - ROAD_HALF)
+        .map(([i]) => [i * CELL - ROAD_HALF, i * CELL + ROAD_HALF]).sort((a, b) => a[0] - b[0]);
+      let from = -30;
+      for (const [a, b] of [...gaps, [30, 30]]) {
+        if (a > from) {
+          box(a - from, 0.05, SIDEWALK, kit.pavement, (a + from) / 2, 0.025, (inner + outer) / 2, false, kerbs);
+          box(a - from, 0.06, 0.06, kit.curb, (a + from) / 2, 0.03, street + side * (ROAD_HALF + 0.03), false, kerbs);
+        }
+        from = Math.max(from, b);
+      }
+    }
+  }
+}
+
+function setTiles(cells = {}) {
+  tiles.clear();
+  for (const [key, kind] of Object.entries(cells)) tiles.set(key, kind);
+  drawTiles();
+  paveSidewalks();
+}
+
+// The brush: 'road', 'walk' or 'erase', painting by dragging; one drag is
+// one undo step. A cyan square shows the cell under the pointer, red where
+// it can't be painted.
+let brush = null;
+let stroke = null;
+const brushMark = new THREE.Mesh(new THREE.BoxGeometry(CELL, 0.02, CELL),
+  new THREE.MeshBasicMaterial({ color: 0x3ec8ff, transparent: true, opacity: 0.35, depthWrite: false }));
+brushMark.visible = false;
+brushMark.raycast = () => {};
+scene.add(brushMark);
+
+function setBrush(b) {
+  if (b) cancelPlacing();
+  brush = b;
+  brushMark.visible = false;
+  $('prompt').hidden = !b;
+  if (b) $('prompt').textContent = `拖曳${b === 'erase' ? '清除' : '鋪設'} · Esc 或右鍵結束`;
+  if (!$('add-panel').hidden) renderAddPanel();
+}
+
+function paintAt(at) {
+  const i = Math.round(at.x / CELL);
+  const j = Math.round(at.z / CELL);
+  const ok = brush === 'erase' || paveable(j);
+  brushMark.position.set(i * CELL, 0.07, j * CELL);
+  brushMark.material.color.setHex(ok ? 0x3ec8ff : 0xff5a5a);
+  brushMark.visible = true;
+  if (!stroke || !ok) return;
+  const key = cellKey(i, j);
+  const want = brush === 'erase' ? undefined : brush;
+  if (tiles.get(key) === want) return;
+  if (want) tiles.set(key, want);
+  else tiles.delete(key);
+  drawTiles();
+  paveSidewalks();
+}
+
+function endStroke() {
+  const before = stroke;
+  stroke = null;
+  if (before.size === tiles.size && [...before].every(([k, v]) => tiles.get(k) === v)) return;
+  undos.push(Object.assign([], { tiles: before }));
+  saveLayout();
+}
 
 // Three save slots in this browser, and layouts as .json files to keep or share.
 const SLOTS_KEY = 'small-town:layout-slots';

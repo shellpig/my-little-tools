@@ -120,7 +120,7 @@
   .slot button:disabled { opacity: .4; cursor: default; }
   .add-panel { position: fixed; left: 28px; top: 248px; z-index: 6; width: 300px; max-height: calc(100vh - 330px); overflow: auto;
     box-sizing: border-box; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(16, 20, 30, .94); }
-  .add-panel[hidden], #add-walls[hidden], #add-shop[hidden] { display: none; }
+  .add-panel[hidden], #add-walls[hidden], #add-shop[hidden], #add-paving[hidden], #add-model-box[hidden] { display: none; }
   .add-models { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
   .add-models button { padding: 0; aspect-ratio: 1; overflow: hidden; border: 2px solid transparent; border-radius: 10px;
     background: rgba(255, 255, 255, .08); cursor: pointer; }
@@ -243,8 +243,11 @@
     <div class="opt-label">配色</div>
     <div id="add-themes" class="colors"></div>
   </div>
-  <div class="opt-label">點一個，再點地面放下</div>
-  <div id="add-models" class="add-models"></div>
+  <div id="add-paving"><div class="opt-label">畫筆（一格是一條馬路寬）</div><div id="add-brushes" class="chips"></div></div>
+  <div id="add-model-box">
+    <div class="opt-label">點一個，再點地面放下</div>
+    <div id="add-models" class="add-models"></div>
+  </div>
 </div>
 <div id="slots" class="slots" hidden>
   <div class="slots-head"><b>小鎮佈局存檔</b><button id="slots-close" class="toggle" title="關閉">✕</button></div>
