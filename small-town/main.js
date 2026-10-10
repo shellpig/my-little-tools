@@ -434,7 +434,10 @@ const STORE_DOOR = new THREE.Vector3(1.72, 0.05, -FRONTAGE + 0.06);
 const STOP_X = 1.75;
 const SHELTER_X = 1.85;
 const SHELTER_Z = -(ROAD_HALF + 0.2);
-const SHELTER_SEATS = [-0.1, 0.1].map(dx => ({ position: new THREE.Vector3(SHELTER_X + dx, 0.07, SHELTER_Z + 0.02), rotation: 0 }));
+// The sit pose rests the thighs about SIT_DROP below a person's origin, so a
+// sitter's origin goes that far above the seat.
+const SIT_DROP = 0.014;
+const SHELTER_SEATS = [-0.1, 0.1].map(dx => ({ position: new THREE.Vector3(SHELTER_X + dx, 0.106 + SIT_DROP, SHELTER_Z - 0.005), rotation: 0 }));
 
 function decorateHotel(building) {
   const bounds = new THREE.Box3().setFromObject(building);
@@ -504,7 +507,7 @@ const benchSeats = [45, 135, 225, 315].flatMap(deg => {
   // Two seats per bench, side by side along the bench.
   return [-0.07, 0.07].map(offset => ({
     bench: { x, z, rotation },
-    position: new THREE.Vector3(x + Math.cos(rotation) * offset + Math.sin(rotation) * 0.02, 0.035,
+    position: new THREE.Vector3(x + Math.cos(rotation) * offset + Math.sin(rotation) * 0.02, 0.097 + SIT_DROP,
       z - Math.sin(rotation) * offset + Math.cos(rotation) * 0.02),
     rotation,
   }));
@@ -2077,7 +2080,6 @@ function showPreview() {
 function spin() {
   if (closet.hidden) return;
   const dt = Math.min(turn.clock.getDelta(), 0.1);
-  if (turn.from === null) turn.angle += dt * 0.5;
   turn.obj.rotation.y = turn.angle;
   turn.mixer.update(dt);
   const canvas = view.domElement;
