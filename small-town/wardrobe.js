@@ -15,7 +15,7 @@ export const ACCESSORIES = [
   { id: '', label: '無' },
   { id: 'glasses', label: '眼鏡', glb: 'aid-glasses' },
   { id: 'sunglasses', label: '墨鏡', glb: 'aid-sunglasses' },
-  { id: 'mask', label: '口罩', glb: 'aid-mask' },
+  { id: 'mask', label: '氧氣鼻管', glb: 'aid-mask' },
   { id: 'cap', label: '棒球帽' },
   { id: 'beanie', label: '毛帽' },
   { id: 'tophat', label: '紳士帽' },
@@ -39,8 +39,10 @@ const FACE_Z = 0.16;
 const SHOE_TOP = 0.095;
 const WAIST = 0.18;
 const NEAR = 0.01;
-// Where the head bone sits in the rest pose (torso + head offsets).
+// Where the head bone sits in the rest pose (torso + head offsets), and the
+// top of the head block under the hair.
 const HEAD_Y = 0.343;
+const HEAD_TOP = 0.67;
 
 const swatchOf = (u, v) => [Math.min(15, Math.floor(u * SIZE / SW)), Math.min(3, Math.floor(v * SIZE / SH))];
 const key = ([c, r]) => `${c},${r}`;
@@ -174,13 +176,14 @@ export function createWardrobe(characters, aids) {
   canvas.width = canvas.height = SIZE;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const source = Object.values(characters)[0].scene.getObjectByProperty('isSkinnedMesh', true).material;
-  const image = source.map.image;
-  const map = source.map.clone();
-  map.image = canvas;
-  map.needsUpdate = true;
+  // A texture of its own: a clone would share the townspeople's image source,
+  // and swapping that image would repaint them too.
+  ctx.drawImage(source.map.image, 0, 0, SIZE, SIZE);
+  const original = ctx.getImageData(0, 0, SIZE, SIZE);
+  const map = new THREE.CanvasTexture(canvas);
+  for (const k of ['flipY', 'colorSpace', 'wrapS', 'wrapT', 'magFilter', 'minFilter']) map[k] = source.map[k];
   const material = source.clone();
   material.map = map;
-  let original = null;
 
   function lookData(look) {
     if (!looks.has(look)) looks.set(look, remap(characters[look], look));
@@ -189,10 +192,6 @@ export function createWardrobe(characters, aids) {
 
   // Each copy keeps the shading of its swatch, scaled to the chosen colour.
   function paint(look, outfit) {
-    if (!original) {
-      ctx.drawImage(image, 0, 0, SIZE, SIZE);
-      original = ctx.getImageData(0, 0, SIZE, SIZE);
-    }
     const out = new ImageData(new Uint8ClampedArray(original.data), SIZE, SIZE);
     const px = (x, y) => (y * SIZE + x) * 4;
     for (const { part, from, to } of lookData(look).copies) {
@@ -226,15 +225,13 @@ export function createWardrobe(characters, aids) {
     if (item.glb) {
       thing = aids[item.glb].scene.clone(true);
       // Placed by eye against the face plane, in the head bone's space.
-      if (item.id === 'mask') thing.position.set(0, 0.02, -0.01);
+      if (item.id === 'mask') thing.position.set(0, -0.01, -0.01);
       else thing.position.set(0, 0.105, 0.1);
       thing.scale.setScalar(item.id === 'mask' ? 1.05 : 1.2);
     } else {
-      // Sits on top of the hair, a little sunk in.
+      // Pulled down over the top of the head; buns and spikes poke through.
       thing = hatMesh(item.id);
-      const geo = lookData(look).geos['head-mesh'];
-      if (!geo.boundingBox) geo.computeBoundingBox();
-      thing.position.set(0, geo.boundingBox.max.y - HEAD_Y - 0.03, 0);
+      thing.position.set(0, HEAD_TOP - HEAD_Y - 0.06, 0);
     }
     thing.name = 'accessory';
     thing.traverse(o => { if (o.isMesh) o.castShadow = true; });

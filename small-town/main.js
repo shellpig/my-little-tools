@@ -248,6 +248,23 @@ function swatchMask(x, y, w, h) {
   return paletteTexture(c);
 }
 
+// The commercial palette with its wall swatch in a pastel instead of white.
+const PASTELS = [['#c2dcf4', '#a2bedb'], ['#c6e8bd', '#a5cb9b'], ['#f6e4a2', '#dbc781']];
+function pastel(textures, [top, bottom]) {
+  const c = document.createElement('canvas');
+  c.width = textures.map.image.width;
+  c.height = textures.map.image.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(textures.map.image, 0, 0);
+  const [x, y, w, h] = REPAINT.commercial[0];
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, top);
+  g.addColorStop(1, bottom);
+  ctx.fillStyle = g;
+  ctx.fillRect(x, y, w, h);
+  return { ...textures, map: paletteTexture(c) };
+}
+
 function paletteMaterial(textures, nightGlow, lightsOut, keep = 0) {
   const mat = new THREE.MeshStandardMaterial({ ...textures, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.8 });
   glowing.push([mat, nightGlow, lightsOut, keep]);
@@ -644,7 +661,10 @@ async function buildTown() {
   // Every building has its own material so its lights go out at its own time.
   const houseMat = paletteMaterial(suburban, 1.2);
   const roadMat = paletteMaterial(roads, 0);
-  const townHouseMat = () => paletteMaterial(commercial, [1.4, 0.7, 2.2][Math.floor(rand() * 3)], bedtime(21.5, 2.5), rand() * 0.15);
+  // About one town house in four has pastel walls.
+  const pastels = PASTELS.map(p => pastel(commercial, p));
+  const townHouseMat = i => paletteMaterial(i % 7 === 2 || i % 7 === 5 ? pastels[i % 3] : commercial,
+    [1.4, 0.7, 2.2][Math.floor(rand() * 3)], bedtime(21.5, 2.5), rand() * 0.15);
   const villaMat = () => paletteMaterial(suburban, 0.9 + rand() * 0.6, bedtime(21, 1), rand() * 0.1);
 
   // Ground, then each street's sidewalks, curbs and road.
@@ -679,7 +699,7 @@ async function buildTown() {
   const villas = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g'];
   HOMES.forEach((home, i) => {
     if (home.villa) jobs.push(building('suburban', villas[i % villas.length], home.x, home, villaMat()));
-    else jobs.push(building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat()));
+    else jobs.push(building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat(i)));
   });
 
   // South of the main street: the park, with a gas station and a car park either side.
