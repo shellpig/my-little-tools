@@ -30,7 +30,6 @@ const LANE = 0.8;
 const ROAD_HALF = LANE;
 const SIDEWALK = 0.8;
 const FRONTAGE = ROAD_HALF + SIDEWALK; // where building fronts and the park start
-const ROAD_END = 11;
 
 // The town is a grid: two east–west streets joined by two north–south lanes.
 const STREETS = [0, -7.2]; // centre line z of the main street and the back street
@@ -757,25 +756,18 @@ function streetLamp(id, x, z, side, model = 'light-square') {
     .then(obj => editable(id, [obj, ...c.parts], c));
 }
 
-// The two lanes: paved strips between the streets and on beyond them, with
-// zebra crossings where they meet each street, plus one from the hotel to
-// the park gate.
+// The two lanes: paved strips between the streets and on beyond them. Their
+// zebra crossings are drawn with the painted ones (see paving).
 function buildAlleys() {
   const paving = std(0x9d978c);
-  const zebra = std(0xe8e2cf, { roughness: 0.6 });
   const spans = [
     [BACK_SOUTH.front, MAIN_NORTH.front],
     [MAIN_SOUTH.front, PARK.zMax + 1],
     [BACK_NORTH.front - 3, BACK_NORTH.front],
   ];
-  const crossing = (x, street, width) => {
-    for (let i = 0; i < 7; i++) box(width, 0.004, 0.11, zebra, x, 0.022, street - ROAD_HALF + 0.12 + i * 0.226);
-  };
   for (const x of ALLEYS) {
     for (const [z0, z1] of spans) box(ALLEY_HALF * 2, 0.02, z1 - z0, paving, x, 0.01, (z0 + z1) / 2);
-    for (const street of STREETS) crossing(x, street, ALLEY_HALF * 1.6);
   }
-  crossing(0, STREETS[0], 0.6);
 }
 
 // ---------- gas station and car park ----------
@@ -1100,7 +1092,7 @@ const partOfDay = t => (t >= 5 && t < 11 ? 'morning' : t >= 11 && t < 17 ? 'day'
 // Which sidewalk of each street faces the block between the two streets,
 // and where each street can be crossed.
 const BLOCK_SIDE = new Map([[STREETS[0], -1], [STREETS[1], 1]]);
-const CROSSINGS = new Map([[STREETS[0], [...ALLEYS, 0]], [STREETS[1], ALLEYS]]);
+const crossingsAt = street => zebras.filter(zb => !zb.ns && zb.z === street).map(zb => zb.x);
 
 // A place is a door on a sidewalk: x along the street, the street, which
 // side of it (−1 north, +1 south) and the door point itself.
@@ -1136,8 +1128,8 @@ function walkZ(street, side, lane) {
   return street + side * (ROAD_HALF + inner + lane * 0.3);
 }
 
-// Door to door along sidewalks, crossing a street only at a crossing and
-// changing streets only by a lane.
+// Door to door along sidewalks, crossing a street at a zebra crossing (or
+// straight over where it has none) and changing streets only by a lane.
 function route(a, b, lane) {
   const pts = [a.door.clone()];
   const at = (x, street, side) => pts.push(new THREE.Vector3(x, 0.05, walkZ(street, side, lane)));
@@ -1146,7 +1138,8 @@ function route(a, b, lane) {
   at(a.x, a.street, a.side);
   if (a.street === b.street) {
     if (a.side !== b.side) {
-      const x = via(CROSSINGS.get(a.street), a.x, b.x);
+      const xs = crossingsAt(a.street);
+      const x = xs.length ? via(xs, a.x, b.x) : a.x;
       at(x, a.street, a.side);
       at(x, b.street, b.side);
     }
@@ -1246,9 +1239,13 @@ async function addPeople() {
 
 // ---------- traffic ----------
 
-// Right-hand traffic on both streets: eastbound (+x) in the south lane,
-// westbound in the north. The bus runs the main street's westbound lane.
-const LANES = STREETS.flatMap(street => [{ z: street - LANE / 2, dir: -1 }, { z: street + LANE / 2, dir: 1 }]);
+// Cars drive the road network: every column of the two streets and every
+// painted road cell is a node, and a car crosses each node on a curve from
+// the side it came in by to the side it leaves by, keeping right. At a
+// junction it picks a way at random, mostly straight on, and turns back at a
+// dead end. Only one car is in a junction at a time. Cars come in out of the
+// fog at either end of the streets and leave past the last column. The bus
+// runs the main street westbound.
 const CARS = ['sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv',
   'van', 'hatchback-sports', 'sedan', 'truck'];
 const PARKED = ['sedan', 'suv', 'van', 'taxi', 'hatchback-sports', 'sedan', 'suv'];
@@ -1256,45 +1253,256 @@ const CAR_SCALE = 0.2;
 const BUS_LENGTH = 1.3;
 const BUS_WIDTH = 0.32;
 const BUS_DWELL = 7;
+const STREET_ENTRY = 7; // street column where cars come in, at the edge of the fog
+const STREET_EXIT = 12; // the last street column; past it cars leave
+const LOOK_AHEAD = 2.5;
+const JUNCTION_RUN = 4; // most junctions in a row a car claims at once
 const vehicles = [];
+const roads = new Map(); // node key → { key, x, z, hx, hz, links: side → key | 'exit', holder }
+const paths = new Map(); // "key,from,to" → curve across that node
 
-// Vehicles are built facing +z and turned to their lane's direction.
+// The unit step toward a side, and the side across from it.
+const dirOf = side => (side === NORTH ? [0, -1] : side === EAST ? [1, 0] : side === SOUTH ? [0, 1] : [-1, 0]);
+const opposite = side => quarter(quarter(side));
+const isJunction = node => node.links.size !== 2;
+
+// Called whenever the painted roads change. A car whose node is gone leaves;
+// the rest finish the curve they are on and plan again from there.
+function buildRoads() {
+  roads.clear();
+  paths.clear();
+  const node = (key, x, z, hx, hz) => roads.set(key, { key, x, z, hx, hz, links: new Map(), holder: null });
+  const link = (a, side, b) => {
+    roads.get(a).links.set(side, b);
+    roads.get(b).links.set(opposite(side), a);
+  };
+  STREETS.forEach((street, k) => {
+    for (let i = -STREET_EXIT; i <= STREET_EXIT; i++) {
+      node(`s${k},${i}`, i * CELL, street, ROAD_HALF, ROAD_HALF);
+      if (i > -STREET_EXIT) link(`s${k},${i - 1}`, EAST, `s${k},${i}`);
+    }
+    roads.get(`s${k},${-STREET_EXIT}`).links.set(WEST, 'exit');
+    roads.get(`s${k},${STREET_EXIT}`).links.set(EAST, 'exit');
+  });
+  const cells = [...tiles].filter(([, kind]) => kind === 'road').map(([key]) => key.split(',').map(Number));
+  for (const [i, j] of cells) {
+    const z = j * CELL;
+    if (!halfCell(j)) {
+      node(cellKey(i, j), i * CELL, z, ROAD_HALF, ROAD_HALF);
+      continue;
+    }
+    // A stub from the street's edge to the cell's far edge.
+    const s = STREETS.reduce((a, b) => (Math.abs(z - b) < Math.abs(z - a) ? b : a));
+    const near = s + Math.sign(z - s) * ROAD_HALF;
+    const far = z + Math.sign(z - s) * ROAD_HALF;
+    node(cellKey(i, j), i * CELL, (near + far) / 2, ROAD_HALF, Math.abs(far - near) / 2);
+  }
+  for (const [i, j] of cells) {
+    const key = cellKey(i, j);
+    const z = j * CELL;
+    if (!halfCell(j) && roads.has(cellKey(i + 1, j))) link(key, EAST, cellKey(i + 1, j));
+    for (const [side, edge] of [[NORTH, z - ROAD_HALF], [SOUTH, z + ROAD_HALF]]) {
+      const k = STREETS.findIndex(s => Math.abs(edge - s) <= ROAD_HALF + 1e-6);
+      if (k >= 0) {
+        if (Math.abs(i) <= STREET_EXIT) link(key, side, `s${k},${i}`);
+      } else if (side === SOUTH && roads.has(cellKey(i, j + 1))) {
+        link(key, SOUTH, cellKey(i, j + 1));
+      }
+    }
+  }
+  for (const v of vehicles) if (v.onRoad) v.replan();
+}
+
+// The curve across a node: in at the right-hand half of one side, out at the
+// right-hand half of another (or the same side, turning back).
+function pathThrough(node, from, to) {
+  const id = `${node.key},${from},${to}`;
+  if (paths.has(id)) return paths.get(id);
+  const [dx, dz] = dirOf(opposite(from));
+  const [ex, ez] = dirOf(to);
+  const reach = (x, z) => Math.abs(x) * node.hx + Math.abs(z) * node.hz;
+  const a = new THREE.Vector3(node.x - dx * reach(dx, dz) - dz * LANE / 2, 0.02, node.z - dz * reach(dx, dz) + dx * LANE / 2);
+  const b = new THREE.Vector3(node.x + ex * reach(ex, ez) - ez * LANE / 2, 0.02, node.z + ez * reach(ex, ez) + ex * LANE / 2);
+  let curve;
+  if (to === opposite(from)) {
+    curve = new THREE.LineCurve3(a, b);
+  } else {
+    const k = reach(dx, dz) * (to === from ? 1.3 : 0.55);
+    curve = new THREE.CubicBezierCurve3(a, a.clone().add(new THREE.Vector3(dx * k, 0, dz * k)),
+      b.clone().sub(new THREE.Vector3(ex * k, 0, ez * k)), b);
+  }
+  curve.len = curve.getLength();
+  paths.set(id, curve);
+  return curve;
+}
+
+// Vehicles are built facing +z and turned to the way they are going.
 class Vehicle {
-  constructor(obj, lane, length, cruise, rank) {
-    Object.assign(this, { obj, lane, length, cruise, rank });
+  constructor(obj, length, cruise, rank) {
+    Object.assign(this, { obj, length, cruise, rank });
     this.speed = 0;
-    this.x = 0;
     this.onRoad = false;
     this.cooldown = rand() * 8;
-    obj.rotation.y = lane.dir * Math.PI / 2;
+    this.pos = new THREE.Vector3();
+    this.heading = new THREE.Vector3(0, 0, 1);
+    this.path = []; // the node it is on, then the ones it has chosen next
+    this.held = []; // junctions it has claimed
     obj.visible = false;
     scene.add(obj);
   }
 
   desiredSpeed() { return this.cruise; }
 
-  enter() {
+  // Mostly straight on; back the way it came at a dead end.
+  chooseExit(node, from) {
+    const ways = [...node.links.keys()].filter(s => s !== from);
+    if (!ways.length) return from;
+    const weights = ways.map(s => (s === opposite(from) ? 4 : 1));
+    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+    return ways.find((_, i) => (r -= weights[i]) < 0) ?? ways.at(-1);
+  }
+
+  step(node, from) {
+    const to = this.chooseExit(node, from);
+    return { node, from, to, curve: pathThrough(node, from, to) };
+  }
+
+  // Choose the node after the last one planned.
+  extend() {
+    const last = this.path.at(-1);
+    if (last.exit) return;
+    const next = roads.get(last.node.links.get(last.to));
+    this.path.push(next ? this.step(next, opposite(last.to)) : { exit: true });
+  }
+
+  // Into a junction only when it is free, together with the junctions right
+  // after it, so two cars never wait on each other inside.
+  claim() {
+    const want = [];
+    for (let k = 1; want.length < JUNCTION_RUN; k++) {
+      if (k >= this.path.length) this.extend();
+      const seg = this.path[k];
+      if (seg.exit || !isJunction(seg.node)) break;
+      want.push(seg.node);
+    }
+    if (want.some(n => n.holder && n.holder !== this)) return false;
+    for (const n of want) n.holder = this;
+    this.held.push(...want);
+    return true;
+  }
+
+  enter(key, from) {
+    const node = roads.get(key);
     this.onRoad = true;
     this.obj.visible = true;
-    this.x = -this.lane.dir * ROAD_END;
+    this.path = [this.step(node, from)];
+    this.held = [];
+    if (isJunction(node)) {
+      node.holder = this;
+      this.held.push(node);
+    }
+    this.s = 0;
     this.speed = this.cruise;
+    this.place();
   }
 
   leave() {
+    for (const n of this.held) if (n.holder === this) n.holder = null;
+    this.held = [];
     this.onRoad = false;
     this.obj.visible = false;
     this.cooldown = 1 + Math.random() * 6;
   }
+
+  // The roads were redrawn: keep the curve it is on, choose again after it.
+  replan() {
+    const seg = this.path[0];
+    const node = roads.get(seg.node.key);
+    if (!node) return this.leave();
+    this.path = [{ ...seg, node }];
+    this.held = [];
+    if (isJunction(node) && !node.holder) {
+      node.holder = this;
+      this.held.push(node);
+    }
+  }
+
+  place() {
+    const { curve } = this.path[0];
+    const u = Math.min(this.s / curve.len, 1);
+    curve.getPointAt(u, this.pos);
+    curve.getTangentAt(u, this.heading);
+    this.obj.position.copy(this.pos);
+    this.obj.rotation.y = Math.atan2(this.heading.x, this.heading.z);
+  }
+
+  // Keep a gap to whatever is in the cone ahead: cars, people in the road,
+  // a crossing someone is on, and a junction it can't have yet.
+  drive(dt, people, busy) {
+    let target = this.desiredSpeed(dt);
+    const brake = gap => { target = Math.min(target, Math.max(0, gap)); };
+    const h = this.heading;
+    const ahead = p => {
+      const rx = p.x - this.pos.x;
+      const rz = p.z - this.pos.z;
+      const along = rx * h.x + rz * h.z;
+      return along > 0 && along < LOOK_AHEAD && Math.abs(rx * h.z - rz * h.x) < 0.2 + along * 0.08 ? along : null;
+    };
+    let queued = Infinity; // how far ahead the nearest car is
+    for (const o of vehicles) {
+      if (o === this || !o.onRoad) continue;
+      const along = ahead(o.pos);
+      if (along === null) continue;
+      brake((along - (this.length + o.length) / 2 - 0.15) * 1.2);
+      queued = Math.min(queued, along - o.length / 2);
+    }
+    for (const p of people) {
+      const along = ahead(p);
+      if (along !== null) brake((along - this.length / 2 - 0.12) * 1.5);
+    }
+    for (const zb of busy) {
+      // Only a crossing over the road this car is on.
+      if (zb.ns ? Math.abs(h.z) < 0.7 : Math.abs(h.x) < 0.7) continue;
+      const rx = zb.x - this.pos.x;
+      const rz = zb.z - this.pos.z;
+      if (Math.abs(rx * h.z - rz * h.x) > ROAD_HALF) continue;
+      const gap = rx * h.x + rz * h.z - zb.w / 2 - this.length / 2 - 0.08;
+      if (gap > -0.05 && gap < LOOK_AHEAD) brake(gap * 1.5);
+    }
+    if (this.path.length < 2) this.extend();
+    const seg = this.path[0];
+    const next = this.path[1];
+    // Claim it only at the front of the queue, close to the junction.
+    const toJunction = seg.curve.len - this.s;
+    const blocked = !next.exit && isJunction(next.node) && !this.held.includes(next.node)
+      && (queued < toJunction || toJunction - this.length / 2 > 0.8 || !this.claim());
+    if (blocked) brake((seg.curve.len - this.s - this.length / 2 - 0.05) * 1.2);
+
+    this.speed += THREE.MathUtils.clamp(target - this.speed, -1.5 * dt, 0.5 * dt);
+    this.s += this.speed * dt;
+    if (blocked) this.s = Math.min(this.s, seg.curve.len - 1e-3);
+    while (this.s >= this.path[0].curve.len) {
+      const done = this.path.shift();
+      this.s -= done.curve.len;
+      if (done.node.holder === this) done.node.holder = null;
+      this.held = this.held.filter(n => n !== done.node);
+      if (this.path[0].exit) return this.leave();
+      if (this.path.length < 2) this.extend();
+    }
+    this.place();
+  }
 }
 
 class Bus extends Vehicle {
-  constructor(obj, lane) {
-    super(obj, lane, BUS_LENGTH, 0.8, 0);
+  constructor(obj) {
+    super(obj, BUS_LENGTH, 0.8, 0);
     this.cooldown = 2;
   }
 
-  enter() {
-    super.enter();
+  chooseExit(node, from) { return opposite(from); }
+
+  enter(key, from) {
+    super.enter(key, from);
     this.state = 'arriving';
   }
 
@@ -1305,7 +1513,7 @@ class Bus extends Vehicle {
 
   desiredSpeed(dt) {
     if (this.state === 'arriving') {
-      const left = (STOP_X - this.x) * this.lane.dir;
+      const left = this.pos.x - STOP_X;
       if (left < 0.02 && this.speed < 0.05) {
         this.state = 'dwelling';
         this.wait = BUS_DWELL;
@@ -1327,7 +1535,7 @@ class Bus extends Vehicle {
 // store, and a guest or two come out to board. Late at night it is quiet.
 function unloadBus(bus) {
   if (!peopleGltfs.length) return;
-  const door = new THREE.Vector3(bus.x + bus.lane.dir * (BUS_LENGTH / 2 - 0.22), 0.05, -ROAD_HALF - 0.06);
+  const door = new THREE.Vector3(bus.pos.x + bus.heading.x * (BUS_LENGTH / 2 - 0.22), 0.05, -ROAD_HALF - 0.06);
   const pick = () => peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
   const late = activity(time) < 0.15;
   const off = late ? Number(Math.random() < 0.4) : 1 + Math.floor(Math.random() * 3);
@@ -1404,9 +1612,9 @@ async function addTraffic() {
   const [wheel, ...cars] = await Promise.all(['wheel-default', ...CARS].map(n => model('car-kit', n)));
   cars.forEach((gltf, i) => {
     const { group, length } = makeCar(gltf, headMat, tailMat);
-    vehicles.push(new Vehicle(group, LANES[i % LANES.length], length, 0.9 + rand() * 0.35, i / cars.length));
+    vehicles.push(new Vehicle(group, length, 0.9 + rand() * 0.35, i / cars.length));
   });
-  vehicles.push(new Bus(makeBus(wheel, headMat, tailMat), LANES[0]));
+  vehicles.push(new Bus(makeBus(wheel, headMat, tailMat)));
 
   // Parked cars in the car park, lights off.
   const off = std(0x333333);
@@ -1421,34 +1629,27 @@ async function addTraffic() {
   });
 }
 
-// Each lane is a queue: everyone drives at their own pace but brakes to keep
-// a gap behind the vehicle ahead, so cars wait behind the bus at its stop.
+// Waiting vehicles come in at either end of a street once the way in is
+// clear; the bus always at the main street's east end.
 function updateTraffic(dt, activity) {
-  for (const v of vehicles) if (!v.onRoad) v.cooldown -= dt;
-  for (const lane of LANES) {
-    const queue = vehicles.filter(v => v.lane === lane && v.onRoad).sort((a, b) => (b.x - a.x) * lane.dir);
-    queue.forEach((v, i) => {
-      let target = v.desiredSpeed(dt);
-      const ahead = queue[i - 1];
-      if (ahead) {
-        const gap = (ahead.x - v.x) * lane.dir - (ahead.length + v.length) / 2;
-        target = Math.min(target, Math.max(0, (gap - 0.15) * 1.2));
-      }
-      // Brake for the player standing in the lane ahead.
-      if (player.active && Math.abs(player.pos.z - lane.z) < 0.38) {
-        const gap = (player.pos.x - v.x) * lane.dir - v.length / 2 - 0.12;
-        if (gap > -v.length / 2) target = Math.min(target, Math.max(0, gap * 1.5));
-      }
-      v.speed += THREE.MathUtils.clamp(target - v.speed, -1.5 * dt, 0.5 * dt);
-      v.x += v.speed * lane.dir * dt;
-      v.obj.position.set(v.x, 0.02, lane.z);
-      if (v.x * lane.dir > ROAD_END) v.leave();
+  const people = walkers.filter(w => w.obj.visible).map(w => w.obj.position);
+  if (player.active) people.push(player.pos);
+  const busy = zebras.filter(zb => people.some(p => onZebra(zb, p)));
+  for (const v of vehicles) {
+    if (v.onRoad) v.drive(dt, people, busy);
+    else v.cooldown -= dt;
+  }
+  const entries = STREETS.flatMap((_, k) => [[`s${k},${-STREET_ENTRY}`, WEST], [`s${k},${STREET_ENTRY}`, EAST]]);
+  for (const v of vehicles) {
+    if (v.onRoad || v.cooldown > 0 || v.rank >= activity) continue;
+    const ways = v instanceof Bus ? [[`s0,${STREET_ENTRY}`, EAST]] : [...entries].sort(() => Math.random() - 0.5);
+    const way = ways.find(([key, from]) => {
+      const node = roads.get(key);
+      if (!node || node.holder) return false;
+      const start = pathThrough(node, from, opposite(from)).getPoint(0);
+      return vehicles.every(o => !o.onRoad || o.pos.distanceTo(start) > (o.length + v.length) / 2 + 0.6);
     });
-    // Let the next waiting vehicle in once the start of the lane is clear.
-    const last = queue.filter(v => v.onRoad).at(-1);
-    if (last && last.x * lane.dir < -ROAD_END + last.length + 0.8) continue;
-    const next = vehicles.find(v => v.lane === lane && !v.onRoad && v.cooldown <= 0 && v.rank < activity);
-    if (next) next.enter();
+    if (way) v.enter(...way);
   }
 }
 
@@ -2441,6 +2642,7 @@ function settleTown() {
 function currentLayout() {
   const layout = {};
   if (tiles.size) layout['#tiles'] = Object.fromEntries(tiles);
+  if (JSON.stringify(zebras) !== JSON.stringify(DEFAULT_ZEBRAS)) layout['#zebras'] = zebras;
   for (const item of editables.values()) {
     const s = stateOf(item);
     // Added things are kept with how to build them again, unless removed.
@@ -2465,6 +2667,7 @@ async function applyLayout() {
     if (item) applyState(item, s);
   }
   setTiles(layout['#tiles']);
+  setZebras(layout['#zebras'] ?? DEFAULT_ZEBRAS);
   settleTown();
 }
 
@@ -2478,11 +2681,12 @@ function change(item, next) {
   select(item.removed ? null : item);
 }
 
-// A step may also carry the painted cells from before it.
+// A step may also carry the painted cells and crossings from before it.
 function undo() {
   const last = undos.pop();
   if (!last) return;
   if (last.tiles) setTiles(Object.fromEntries(last.tiles));
+  if (last.zebras) setZebras(last.zebras);
   for (const [item, state] of last) applyState(item, state);
   saveLayout();
   settleTown();
@@ -2498,8 +2702,9 @@ async function loadLayout(layout) {
     const item = await buildAdded(id, s.add);
     applyState(item, { ...stateOf(item), removed: true });
   }
-  const step = Object.assign([], { tiles: new Map(tiles) });
+  const step = Object.assign([], { tiles: new Map(tiles), zebras: zebras.map(zb => ({ ...zb })) });
   setTiles(layout['#tiles']);
+  setZebras(layout['#zebras'] ?? DEFAULT_ZEBRAS);
   for (const item of editables.values()) {
     step.push([item, stateOf(item)]);
     applyState(item, layout[item.id] ?? (item.add ? { ...stateOf(item), removed: true } : { ...item.base, removed: false }));
@@ -2552,7 +2757,7 @@ addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     controls.enabled = false;
     drag = {};
-    stroke = new Map(tiles);
+    stroke = { tiles: new Map(tiles), zebras: JSON.stringify(zebras) };
     aim(e);
     const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
     if (at) paintAt(at);
@@ -2647,7 +2852,7 @@ const ADD_TYPES = [
   { type: 'lamp', label: '路燈', pack: 'roads', models: ['light-square', 'light-curved'] },
   { type: 'paving', label: '道路', models: [] },
 ];
-const BRUSHES = [['road', '馬路'], ['walk', '人行道'], ['erase', '清除']];
+const BRUSHES = [['road', '馬路'], ['walk', '人行道'], ['zebra', '斑馬線'], ['erase', '清除']];
 // Wall colours: white, or one of the pastels.
 const WALLS = [['白色', -1], ['淡藍', 0], ['淡綠', 1], ['淡黃', 2]];
 const SHOP_THEMES = [
@@ -2899,6 +3104,7 @@ async function drawTiles() {
     }
     if (from < STREET_END) straight(from, STREET_END);
   }
+  buildRoads();
 }
 
 // The streets' pavements and curbs, with a gap wherever a road crosses.
@@ -2923,6 +3129,54 @@ function paveSidewalks() {
   }
 }
 
+// Zebra crossings: across a street, or across a straight painted road (`ns`:
+// a road running north–south), `w` wide along the road. The lanes and the
+// hotel have theirs to begin with.
+const DEFAULT_ZEBRAS = [
+  ...ALLEYS.flatMap(x => STREETS.map(z => ({ x, z, w: ALLEY_HALF * 1.6, ns: false }))),
+  { x: 0, z: STREETS[0], w: 0.6, ns: false },
+];
+const zebras = DEFAULT_ZEBRAS.map(zb => ({ ...zb }));
+const zebraMat = std(0xe8e2cf, { roughness: 0.6 });
+const zebraGroup = new THREE.Group();
+scene.add(zebraGroup);
+
+function drawZebras() {
+  zebraGroup.clear();
+  for (const { x, z, w, ns } of zebras) {
+    for (let i = 0; i < 7; i++) {
+      const t = -ROAD_HALF + 0.12 + i * 0.226;
+      if (ns) box(0.11, 0.004, w, zebraMat, x + t, 0.022, z, false, zebraGroup);
+      else box(w, 0.004, 0.11, zebraMat, x, 0.022, z + t, false, zebraGroup);
+    }
+  }
+}
+
+function setZebras(list) {
+  zebras.splice(0, zebras.length, ...list.map(zb => ({ ...zb })));
+  drawZebras();
+}
+
+// Someone on a crossing, or just stepping onto it.
+function onZebra(zb, p) {
+  const [along, across] = zb.ns ? [p.z - zb.z, p.x - zb.x] : [p.x - zb.x, p.z - zb.z];
+  return Math.abs(along) < zb.w / 2 + 0.15 && Math.abs(across) < ROAD_HALF + 0.1;
+}
+
+// Where a crossing painted at this cell would go: across a street clear of
+// its junctions, or across a straight road cell; nowhere else.
+function zebraAt(at, i, j) {
+  const street = STREETS.findIndex(s => Math.abs(at.z - s) <= ROAD_HALF);
+  const node = roads.get(street >= 0 ? `s${street},${i}` : cellKey(i, j));
+  if (!node || isJunction(node) || (street < 0 && halfCell(j))) return null;
+  const sides = [...node.links.keys()];
+  if (sides[0] !== opposite(sides[1])) return null;
+  const zb = { x: node.x, z: node.z, w: ALLEY_HALF * 1.6, ns: sides.includes(NORTH) };
+  return zebras.some(o => Math.hypot(o.x - zb.x, o.z - zb.z) < CELL - 1e-6) ? null : zb;
+}
+
+const inCell = (zb, i, j) => Math.abs(zb.x - i * CELL) <= CELL / 2 + 1e-6 && Math.abs(zb.z - j * CELL) <= CELL / 2 + 1e-6;
+
 function setTiles(cells = {}) {
   tiles.clear();
   for (const [key, kind] of Object.entries(cells)) tiles.set(key, kind);
@@ -2930,8 +3184,8 @@ function setTiles(cells = {}) {
   paveSidewalks();
 }
 
-// The brush: 'road', 'walk' or 'erase', painting by dragging; one drag is
-// one undo step. A cyan square shows the cell under the pointer, red where
+// The brush: 'road', 'walk', 'zebra' or 'erase', painting by dragging; one
+// drag is one undo step. A cyan square shows the cell under the pointer, red where
 // it can't be painted.
 let brush = null;
 let stroke = null;
@@ -2953,11 +3207,17 @@ function setBrush(b) {
 function paintAt(at) {
   const i = Math.round(at.x / CELL);
   const j = Math.round(at.z / CELL);
-  const ok = brush === 'erase' || paveable(j);
-  brushMark.position.set(i * CELL, 0.07, j * CELL);
+  const zebra = brush === 'zebra' ? zebraAt(at, i, j) : null;
+  const ok = brush === 'erase' || (brush === 'zebra' ? !!zebra : paveable(j));
+  brushMark.position.set(zebra ? zebra.x : i * CELL, 0.07, zebra ? zebra.z : j * CELL);
   brushMark.material.color.setHex(ok ? 0x3ec8ff : 0xff5a5a);
   brushMark.visible = true;
   if (!stroke || !ok) return;
+  if (zebra) {
+    zebras.push(zebra);
+    return drawZebras();
+  }
+  if (brush === 'erase' && zebras.some(zb => inCell(zb, i, j))) setZebras(zebras.filter(zb => !inCell(zb, i, j)));
   const key = cellKey(i, j);
   const want = brush === 'erase' ? undefined : brush;
   if (tiles.get(key) === want) return;
@@ -2970,9 +3230,12 @@ function paintAt(at) {
 function endStroke() {
   const before = stroke;
   stroke = null;
-  if (before.size === tiles.size && [...before].every(([k, v]) => tiles.get(k) === v)) return;
-  undos.push(Object.assign([], { tiles: before }));
+  const sameTiles = before.tiles.size === tiles.size && [...before.tiles].every(([k, v]) => tiles.get(k) === v);
+  const sameZebras = before.zebras === JSON.stringify(zebras);
+  if (sameTiles && sameZebras) return;
+  undos.push(Object.assign([], { tiles: before.tiles, zebras: JSON.parse(before.zebras) }));
   saveLayout();
+  if (!sameZebras) settleTown();
 }
 
 // Three save slots in this browser, and layouts as .json files to keep or share.
