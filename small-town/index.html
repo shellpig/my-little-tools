@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小鎮</title>
+<style>
+  :root {
+    --panel: rgba(16, 20, 30, .72);
+    --line: rgba(255, 255, 255, .09);
+    --text: #e8ecf3;
+    --dim: #8a93a6;
+    --accent: #ffd27a;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1020; color: var(--text);
+    font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; }
+  canvas { display: block; }
+  .title { position: fixed; left: 28px; top: 22px; pointer-events: none; }
+  .title h1 { margin: 0; font-size: 40px; font-weight: 900; letter-spacing: 2px; color: #fff;
+    text-shadow: 0 2px 18px rgba(0, 0, 0, .45); }
+  .title p { margin: 6px 0 0; font-size: 14px; color: #c9d1e0; text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
+  .panel { position: fixed; right: 20px; bottom: 20px; width: 300px; padding: 16px 18px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(12px); }
+  .clock { display: flex; align-items: baseline; gap: 10px; }
+  .clock b { font: 600 34px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .clock span { font-size: 13px; color: var(--dim); }
+  input[type=range] { width: 100%; margin: 14px 0 12px; accent-color: var(--accent); }
+  .row { display: flex; gap: 6px; }
+  .row + .row { margin-top: 6px; }
+  .row button { flex: 1; padding: 7px 0; border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
+    background: rgba(255, 255, 255, .04); color: var(--text); font-family: inherit; font-size: 13px; }
+  .row button:hover { background: rgba(255, 255, 255, .1); }
+  .row button.on { background: #f3f5f9; color: #111; }
+  .hint { margin-top: 10px; font-size: 12px; color: var(--dim); }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 15px; color: var(--dim);
+    background: #0b1020; transition: opacity .6s; }
+  #loading.done { opacity: 0; pointer-events: none; }
+  @media (max-width: 600px) {
+    .panel { left: 12px; right: 12px; bottom: 12px; width: auto; }
+    .title { left: 16px; top: 14px; }
+    .title h1 { font-size: 30px; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div class="title">
+  <h1>小鎮</h1>
+  <p>一條街、三家店。拖曳旋轉，滾輪縮放，右鍵平移。</p>
+</div>
+
+<div class="panel">
+  <div class="clock"><b id="clock">21:00</b><span id="period">夜晚</span></div>
+  <input id="time" type="range" min="0" max="24" step="0.01" value="21">
+  <div class="row">
+    <button data-speed="0">暫停</button>
+    <button data-speed="60" class="on">60×</button>
+    <button data-speed="600">600×</button>
+    <button data-speed="3600">3600×</button>
+  </div>
+  <div class="row">
+    <button data-time="7">清晨</button>
+    <button data-time="12">中午</button>
+    <button data-time="18.2">黃昏</button>
+    <button data-time="21">夜晚</button>
+  </div>
+  <div class="hint">空白鍵暫停 · 60× 為每秒經過一分鐘</div>
+</div>
+
+<div id="loading">小鎮搭建中…</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
