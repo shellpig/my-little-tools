@@ -1757,7 +1757,8 @@ toggle.addEventListener('click', () => { setCollapsed(!panel.classList.contains(
 addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyH') setCollapsed(!panel.classList.contains('collapsed'));
-  if (e.code !== 'Space') return;
+  // While walking about, space jumps instead.
+  if (e.code !== 'Space' || (player.active && closet.hidden)) return;
   e.preventDefault();
   setSpeed(speed ? 0 : lastSpeed);
 });
@@ -2130,10 +2131,12 @@ function updateTalk(dt) {
 // relative to where it looks. Touch screens get a stick and an action button.
 const PLAYER_KEY = 'small-town:player';
 const PLAYER_R = 0.09;
-const WALK = 0.55;
+const WALK = 0.825;
 const RUN = 1.25;
+const JUMP_SPEED = 1.6;
+const GRAVITY = 6;
 const BOUNDS = { minX: -12.5, maxX: 12.5, minZ: BACK_NORTH.front - 2.8, maxZ: PARK.zMax + 3 };
-const player = { active: false, look: 'male-f', name: '', outfit: {}, pos: new THREE.Vector3(0.6, 0, MAIN_SOUTH.front - 0.35), obj: null };
+const player = { active: false, look: 'male-f', name: '', outfit: {}, pos: new THREE.Vector3(0.6, 0, MAIN_SOUTH.front - 0.35), obj: null, air: 0, vy: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}');
   Object.assign(player, { look: saved.look ?? player.look, name: saved.name ?? '', outfit: saved.outfit ?? {} });
@@ -2209,7 +2212,9 @@ function dressPlayer() {
   scene.add(obj);
   const mixer = new THREE.AnimationMixer(obj);
   const clip = name => mixer.clipAction(THREE.AnimationClip.findByName(gltf.animations, name));
-  Object.assign(player, { obj, mixer, moves: { idle: clip('idle'), walk: clip('walk'), sprint: clip('sprint') }, move: 'idle' });
+  Object.assign(player, { obj, mixer, moves: { idle: clip('idle'), walk: clip('walk'), sprint: clip('sprint'), jump: clip('jump') }, move: 'idle' });
+  player.moves.walk.timeScale = WALK / 0.55; // the steps keep up with the faster walk
+  player.moves.jump.setLoop(THREE.LoopOnce).clampWhenFinished = true;
   player.moves.idle.play();
 }
 
@@ -2447,6 +2452,10 @@ addEventListener('keydown', e => {
     if (e.code.startsWith('Arrow')) e.preventDefault();
   }
   if (e.code === 'KeyE' && !e.repeat) interact();
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!e.repeat && !player.air) player.vy = JUMP_SPEED;
+  }
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -2504,6 +2513,12 @@ function updatePlayer(dt) {
   const amount = Math.min(1, Math.hypot(ix, iz));
   const running = [...keys].some(c => c.startsWith('Shift')) || Math.hypot(stick.x, stick.y) > 0.92;
   const before = player.pos.clone();
+  // A jump: up and back down onto whatever is underfoot.
+  if (player.vy || player.air) {
+    player.air += player.vy * dt;
+    player.vy -= GRAVITY * dt;
+    if (player.air <= 0) player.air = player.vy = 0;
+  }
   if (amount > 0.1) {
     // W heads where the camera looks, flattened onto the ground.
     camera.getWorldDirection(forward).setY(0).normalize();
@@ -2515,11 +2530,11 @@ function updatePlayer(dt) {
     player.pos.z += dz / len * step;
     collide(player.pos);
     player.obj.rotation.y = Math.atan2(dx, dz);
-    setMove(running ? 'sprint' : 'walk');
+    setMove(player.air ? 'jump' : running ? 'sprint' : 'walk');
   } else {
-    setMove('idle');
+    setMove(player.air ? 'jump' : 'idle');
   }
-  player.pos.y = groundHeight(player.pos.x, player.pos.z);
+  player.pos.y = groundHeight(player.pos.x, player.pos.z) + player.air;
   player.obj.position.copy(player.pos);
   player.mixer.update(dt);
   // The camera rides along by however far the player moved.
