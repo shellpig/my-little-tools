@@ -7,8 +7,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { HorizontalTiltShiftShader } from 'three/addons/shaders/HorizontalTiltShiftShader.js';
-import { VerticalTiltShiftShader } from 'three/addons/shaders/VerticalTiltShiftShader.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -74,9 +72,30 @@ const composer = new EffectComposer(renderer, target);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.5, 0.82);
 composer.addPass(bloom);
-const tiltH = new ShaderPass(HorizontalTiltShiftShader);
-const tiltV = new ShaderPass(VerticalTiltShiftShader);
-tiltH.uniforms.r.value = tiltV.uniforms.r.value = 0.5;
+
+// Tilt-shift with a sharp band: rows within `band` of the focus line `r`
+// stay crisp, so the street and its signs read clearly, and only the top
+// and bottom of the frame blur. One pass per axis; `texel` is one pixel's size.
+const TILT = { r: 0.55, band: 0.28, strength: 3 };
+function tiltShiftPass(axis) {
+  return new ShaderPass({
+    uniforms: { tDiffuse: { value: null }, texel: { value: 0 }, r: { value: TILT.r }, band: { value: TILT.band } },
+    vertexShader: `varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform sampler2D tDiffuse; uniform float texel, r, band; varying vec2 vUv;
+      void main() {
+        vec2 d = vec2(${axis === 'x' ? '1.0, 0.0' : '0.0, 1.0'}) * texel * max(0.0, abs(r - vUv.y) - band);
+        vec4 sum = texture2D(tDiffuse, vUv - 4.0 * d) * 0.051 + texture2D(tDiffuse, vUv - 3.0 * d) * 0.0918
+          + texture2D(tDiffuse, vUv - 2.0 * d) * 0.12245 + texture2D(tDiffuse, vUv - d) * 0.1531
+          + texture2D(tDiffuse, vUv) * 0.1633
+          + texture2D(tDiffuse, vUv + d) * 0.1531 + texture2D(tDiffuse, vUv + 2.0 * d) * 0.12245
+          + texture2D(tDiffuse, vUv + 3.0 * d) * 0.0918 + texture2D(tDiffuse, vUv + 4.0 * d) * 0.051;
+        gl_FragColor = sum;
+      }`,
+  });
+}
+const tiltH = tiltShiftPass('x');
+const tiltV = tiltShiftPass('y');
 composer.addPass(tiltH);
 composer.addPass(tiltV);
 composer.addPass(new OutputPass());
@@ -86,15 +105,16 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
-  tiltH.uniforms.h.value = 2.5 / innerWidth;
-  tiltV.uniforms.v.value = 2.5 / innerHeight;
+  tiltH.uniforms.texel.value = TILT.strength / innerWidth;
+  tiltV.uniforms.texel.value = TILT.strength / innerHeight;
 }
 addEventListener('resize', resize);
 resize();
 
 // ---------- materials ----------
 
-// [material, emissive intensity at full night]
+// [material, emissive intensity at full night, lights-out hour, share left on]
+// Entries without a lights-out hour stay lit all night (signs, lamps, cars).
 const glowing = [];
 const lamps = [];
 
@@ -190,11 +210,14 @@ function swatchMask(x, y, w, h) {
   return paletteTexture(c);
 }
 
-function paletteMaterial(textures, nightGlow) {
+function paletteMaterial(textures, nightGlow, lightsOut, keep = 0) {
   const mat = new THREE.MeshStandardMaterial({ ...textures, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.8 });
-  glowing.push([mat, nightGlow]);
+  glowing.push([mat, nightGlow, lightsOut, keep]);
   return mat;
 }
+
+// A random bedtime between two clock hours, which may cross midnight.
+const bedtime = (from, to) => (from + rand() * ((to - from + 24) % 24)) % 24;
 
 // ---------- model loading ----------
 
@@ -240,10 +263,12 @@ function alignFront(obj) {
 
 // ---------- shops ----------
 
+// `closes` is the clock hour the sign and lights go out; the convenience
+// store is open all night.
 const SHOPS = [
-  { model: 'building-c', x: -1.72, name: '晨光咖啡', bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a },
-  { model: 'building-a', x: -2.72, name: '小巷書店', bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f },
-  { model: 'building-h', x: 1.72, name: '便利商店', bg: '#f7f7f4', fg: '#1d6fd6', awning: 0x2c6fc4 },
+  { model: 'building-c', x: -1.72, name: '晨光咖啡', bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a, glow: 1.4, closes: 22.5 },
+  { model: 'building-a', x: -2.72, name: '小巷書店', bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f, glow: 1.2, closes: 21.5 },
+  { model: 'building-h', x: 1.72, name: '便利商店', bg: '#f7f7f4', fg: '#1d6fd6', awning: 0x2c6fc4, glow: 1.8 },
 ];
 
 function signTexture(text, bg, fg) {
@@ -272,7 +297,7 @@ async function decorateShop(building, shop) {
 
   const tex = signTexture(shop.name, shop.bg, shop.fg);
   const signMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, roughness: 0.6 });
-  glowing.push([signMat, 0.45]);
+  glowing.push([signMat, 0.45, shop.closes]);
   box(width * 0.72, width * 0.17, 0.02, signMat, shop.x, 0.45, front + 0.012);
 }
 
@@ -523,13 +548,11 @@ function buildPark(jobs, plantMat) {
 
 async function buildTown() {
   const [commercial, suburban, roads] = await Promise.all(['commercial', 'suburban', 'roads'].map(palette));
-  // Three window brightnesses so the buildings are not lit identically.
-  const shopMats = [paletteMaterial(commercial, 2.2), paletteMaterial(commercial, 1.4), paletteMaterial(commercial, 0.7)];
+  // Every building has its own material so its lights go out at its own time.
   const houseMat = paletteMaterial(suburban, 1.2);
   const roadMat = paletteMaterial(roads, 0);
   // Skyline towers draw their window bands with the grey-blue swatch.
   const towerWindows = { map: commercial.map, emissiveMap: swatchMask(32, 256, 32, 128) };
-  const towerMats = [paletteMaterial(towerWindows, 0.9), paletteMaterial(towerWindows, 0.55), paletteMaterial(towerWindows, 0.3)];
 
   // Ground, sidewalks and curbs.
   box(120, 0.1, 120, std(0x667a52), 0, -0.05, 0);
@@ -545,23 +568,25 @@ async function buildTown() {
   for (let x = -20; x <= 20; x++) jobs.push(place('roads', 'road-straight', { x, scale: [1, 1, ROAD_HALF * 2], mat: roadMat }));
 
   // The hotel in the middle, with the bus stop at its door.
-  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6) }).then(obj => decorateHotel(alignFront(obj))));
+  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => decorateHotel(alignFront(obj))));
   buildBusStop();
 
   // The three shops either side of the hotel, each with an awning and a sign.
   SHOPS.forEach((shop, i) => jobs.push(
-    place('commercial', shop.model, { x: shop.x, mat: shopMats[i] })
+    place('commercial', shop.model, { x: shop.x, mat: paletteMaterial(commercial, shop.glow, shop.closes) })
       .then(obj => decorateShop(alignFront(obj), shop))));
 
   // Neighbours along the street, then a skyline behind.
   const neighbours = ['building-b', 'building-d', 'building-e', 'building-f', 'building-g', 'building-i', 'building-j', 'building-k'];
-  [-3.8, 2.75, 3.85, -4.95, 5.0, -6.1].forEach((x, i) =>
-    jobs.push(place('commercial', neighbours[i % neighbours.length], { x, mat: shopMats[(i + 1) % 3] }).then(alignFront)));
+  [-3.8, 2.75, 3.85, -4.95, 5.0, -6.1].forEach((x, i) => {
+    const mat = paletteMaterial(commercial, [1.4, 0.7, 2.2][i % 3], bedtime(21.5, 2.5), rand() * 0.15);
+    jobs.push(place('commercial', neighbours[i % neighbours.length], { x, mat }).then(alignFront));
+  });
   for (let i = 0; i < 18; i++) {
     const name = `low-detail-building-${'abcdefghijklmn'[Math.floor(rand() * 14)]}`;
     jobs.push(place('commercial', name, {
       x: -9 + rand() * 18, z: -FRONTAGE - 3.2 - rand() * 5, rot: Math.floor(rand() * 4) * Math.PI / 2,
-      scale: 0.55 + rand() * 0.35, mat: towerMats[Math.floor(rand() * 3)],
+      scale: 0.55 + rand() * 0.35, mat: paletteMaterial(towerWindows, 0.3 + rand() * 0.6, bedtime(22, 3), 0.2),
     }));
   }
 
@@ -954,8 +979,21 @@ const MOON = new THREE.Color(0x9bb4ff);
 const sky = new THREE.Color();
 const lightDir = new THREE.Vector3();
 
-// Share of pedestrians out on the street: busy in the afternoon, few at night.
-const activity = t => 0.18 + 0.82 * Math.max(0, Math.sin(Math.PI * (t - 6) / 18));
+// Share of people (and cars) out, by clock hour: busy through the afternoon,
+// thinning out from the evening to a handful after midnight.
+const ACTIVITY = [[0, 0.06], [4, 0.04], [6, 0.25], [8, 0.7], [12, 0.9], [15, 1], [18, 0.9],
+  [20, 0.65], [22, 0.35], [23, 0.18], [24, 0.06]];
+function activity(t) {
+  const i = ACTIVITY.findIndex(([h]) => h > t);
+  const [h0, a0] = ACTIVITY[i - 1];
+  const [h1, a1] = ACTIVITY[i];
+  return a0 + (a1 - a0) * (t - h0) / (h1 - h0);
+}
+
+// 0 before a building's lights-out hour, rising to 1 over the half hour after.
+// Hours count from noon so that an evening and the night after it compare.
+const sinceNoon = h => (h + 12) % 24;
+const lightsGone = (t, out) => smooth(sinceNoon(t), sinceNoon(out), sinceNoon(out) + 0.5);
 
 function applyTime(t) {
   const angle = (t - 6) / 12 * Math.PI;
@@ -984,7 +1022,10 @@ function applyTime(t) {
   scene.background = sky;
   scene.fog.color.copy(sky);
 
-  for (const [mat, glow] of glowing) mat.emissiveIntensity = glow * night;
+  for (const [mat, glow, out, keep = 0] of glowing) {
+    const on = out === undefined ? 1 : 1 - (1 - keep) * lightsGone(t, out);
+    mat.emissiveIntensity = glow * night * on;
+  }
   for (const l of lamps) l.intensity = 2.2 * night;
   bloom.strength = 0.2 + 0.6 * night;
 }
