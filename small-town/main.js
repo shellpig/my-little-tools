@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RESIDENTS, PASSERBY_LINES } from './residents.js';
+import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -507,6 +508,9 @@ function onPath(x, z) {
     || (Math.abs(z - PARK.cz) < 0.4); // cross paths
 }
 
+// Filled in by buildPark for the wishing fountain.
+const fountain = {};
+
 function buildPark(jobs, plantMat) {
   const { cz, ring, xHalf, zMin, zMax, path } = PARK;
   const lawn = std(0x74924f);
@@ -532,7 +536,12 @@ function buildPark(jobs, plantMat) {
   cylinder(0.06, 0.08, 0.22, stone, 0, 0.17, cz, 12);
   cylinder(0.2, 0.11, 0.05, stone, 0, 0.29, cz, 20);
   cylinder(0.17, 0.17, 0.008, water, 0, 0.312, cz, 20);
-  cylinder(0.025, 0.04, 0.1, water, 0, 0.36, cz, 10);
+  const spout = cylinder(0.025, 0.04, 0.1, water, 0, 0.36, cz, 10);
+  Object.assign(fountain, { water, spout, spoutY: spout.position.y });
+  fountain.hit = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.5, 16), HIT_MAT);
+  fountain.hit.position.set(0, 0.25, cz);
+  fountain.hit.userData.fountain = true;
+  scene.add(fountain.hit);
 
   for (let i = 0; i < benchSeats.length; i += 2) {
     const { x, z, rotation } = benchSeats[i].bench;
@@ -1410,7 +1419,7 @@ function applyTime(t) {
 
   for (const [mat, glow, out, keep = 0] of glowing) {
     const on = out === undefined ? 1 : 1 - (1 - keep) * lightsGone(t, out);
-    mat.emissiveIntensity = glow * night * on;
+    mat.emissiveIntensity = glow * night * on + (mat.userData.boost ?? 0);
   }
   for (const l of lamps) l.intensity = 2.2 * night;
   bloom.strength = 0.2 + 0.6 * night;
@@ -1596,12 +1605,16 @@ function surfaceY(x, z) {
   return hit ? hit.point.y : 0;
 }
 
-// Found cats and the number of finds, kept in this browser.
+// The town book: found cats, the number of finds, blessings seen and
+// coins thrown, kept in this browser.
 const CAT_KEY = 'small-town:cats';
-let catBook = { found: [], finds: 0 };
+let catBook = { found: [], finds: 0, blessings: [], coins: 0 };
 try { catBook = { ...catBook, ...JSON.parse(localStorage.getItem(CAT_KEY) || '{}') }; } catch { /* storage unavailable */ }
 
 const hex = c => `#${c.toString(16).padStart(6, '0')}`;
+function saveBook() {
+  try { localStorage.setItem(CAT_KEY, JSON.stringify(catBook)); } catch { /* storage unavailable */ }
+}
 function drawCatBook(fresh) {
   $('cat-count').textContent = `${catBook.found.length}/${CATS.length}`;
   $('cat-row').replaceChildren(...CATS.map(c => {
@@ -1613,14 +1626,28 @@ function drawCatBook(fresh) {
     if (found) chip.style.color = [0x2a2a2f, 0x5e4a33, 0xa88f6a, 0x8c939d].includes(c.coat) ? '#fff' : '#1d2230';
     return chip;
   }));
-  $('cat-total').textContent = catBook.finds ? `一共找到 ${catBook.finds} 次` : '貓咪躲在小鎮各處，點牠們一下';
+  $('wish-count').textContent = `${catBook.blessings.length}/${BLESSINGS.length}`;
+  $('wish-row').replaceChildren(...BLESSINGS.map(b => {
+    const chip = document.createElement('span');
+    const seen = catBook.blessings.includes(b.id);
+    chip.className = `chip${seen ? ' found' : ''}${b.id === fresh ? ' pop' : ''}`;
+    chip.textContent = seen ? b.icon : '?';
+    chip.title = seen ? `${b.name}：${b.desc}` : '在噴水池許願';
+    if (seen) chip.style.background = RARITY[b.rarity].color;
+    if (seen) chip.style.color = '#1d2230';
+    return chip;
+  }));
+  const parts = [];
+  if (catBook.finds) parts.push(`找到貓 ${catBook.finds} 次`);
+  if (catBook.coins) parts.push(`許願 ${catBook.coins} 次`);
+  $('cat-total').textContent = parts.length ? parts.join('・') : '貓咪躲在小鎮各處；點噴水池可以許願';
 }
 
 function findCat(cat) {
   const fresh = !catBook.found.includes(cat.info.name);
   if (fresh) catBook.found.push(cat.info.name);
   catBook.finds++;
-  try { localStorage.setItem(CAT_KEY, JSON.stringify(catBook)); } catch { /* storage unavailable */ }
+  saveBook();
   drawCatBook(fresh ? cat.info.name : null);
   cat.sneakOff(1.6);
 }
@@ -1665,6 +1692,56 @@ function updateCats(dt) {
   if (cat !== talking) cat.sneakOff();
 }
 
+// ---------- wishing fountain ----------
+
+let crowdBoost = 0;
+let wishes;
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3);
+let pointerOnGround = null;
+
+// The fountain speaks for the coin: a plain wish, or the blessing it brought.
+const fountainVoice = { obj: { position: new THREE.Vector3(0, 0.1, PARK.cz), visible: true }, bubbleY: 0.6 };
+
+function wishResult({ line, blessing }) {
+  catBook.coins++;
+  let fresh = null;
+  if (blessing && !catBook.blessings.includes(blessing.id)) {
+    catBook.blessings.push(blessing.id);
+    fresh = blessing.id;
+  }
+  saveBook();
+  drawCatBook(fresh);
+  const rarity = blessing && RARITY[blessing.rarity];
+  talk(fountainVoice, { name: blessing ? `✨ ${blessing.name}` : '許願池', role: rarity ? rarity.label : '', line });
+  if (blessing) announce(`${rarity.label}・${blessing.name}`, rarity.color);
+}
+
+let bannerTimer = 0;
+function announce(text, color) {
+  const banner = $('banner');
+  banner.textContent = `✨ ${text}`;
+  banner.style.setProperty('--glow', color);
+  banner.classList.remove('show');
+  void banner.offsetWidth;
+  banner.classList.add('show');
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => banner.classList.remove('show'), 3500);
+}
+
+function addWishes() {
+  patchSnow(scene);
+  wishes = createWishes({
+    scene,
+    camera,
+    park: PARK,
+    fountain,
+    getTime: () => time,
+    setCrowdBoost: v => { crowdBoost = v; },
+    pointerGround: () => pointerOnGround,
+    streets: { back: STREETS[1], alleys: ALLEYS },
+  });
+}
+
 // ---------- talking to people ----------
 
 // A click (not a drag) on someone makes them hop and say a line in a
@@ -1676,27 +1753,49 @@ let talking = null;
 let talkUntil = 0;
 let downAt = null;
 
-renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
-renderer.domElement.addEventListener('pointerup', e => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
-  pointer.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-  raycaster.setFromCamera(pointer, camera);
-  const targets = [...walkers.filter(w => w.obj.visible), ...cats.filter(c => !c.poof)].map(w => w.hit);
-  const hit = raycaster.intersectObjects(targets, false)[0];
-  if (!hit) return;
-  const person = hit.object.userData.person ?? hit.object.userData.cat;
-  if (hit.object.userData.cat) {
-    findCat(person);
-    hearts(e.clientX, e.clientY);
-  }
-  const { name, role, line } = person.speech();
+function talk(speaker, { name, role, line }) {
   bubble.querySelector('b').textContent = name;
   bubble.querySelector('span').textContent = role;
   bubble.querySelector('p').textContent = line;
   bubble.hidden = false;
-  talking = person;
+  talking = speaker;
   talkUntil = performance.now() + 5000;
-  if (person instanceof Person) person.hop = HOP;
+}
+
+function aim(e) {
+  pointer.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+}
+
+renderer.domElement.addEventListener('pointermove', e => {
+  aim(e);
+  pointerOnGround = raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
+});
+renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
+  aim(e);
+  const targets = [
+    ...wishes.clickables(),
+    ...[...walkers.filter(w => w.obj.visible), ...cats.filter(c => !c.poof)].map(w => w.hit),
+    fountain.hit,
+  ];
+  const hit = raycaster.intersectObjects(targets, false)[0];
+  if (!hit) return;
+  const data = hit.object.userData;
+  if (data.onClick) return data.onClick();
+  if (data.fountain) {
+    // One coin in the air at a time.
+    if (!wishes.flying()) wishes.throwCoin(wishResult);
+    return;
+  }
+  const speaker = data.person ?? data.cat;
+  if (data.cat) {
+    findCat(speaker);
+    hearts(e.clientX, e.clientY);
+  }
+  talk(speaker, speaker.speech());
+  if (speaker instanceof Person) speaker.hop = HOP;
 });
 
 const HOP = 0.45;
@@ -1730,11 +1829,12 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
   time = (time + dt * speed / 3600) % 24;
   applyTime(time);
-  const a = activity(time);
+  const a = Math.min(1, activity(time) + crowdBoost);
   for (const w of walkers) w.update(dt, a);
   for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
   updateTraffic(dt, a);
   updateCats(dt);
+  wishes.update(dt);
   updateTalk(dt);
   controls.update();
   updateUI();
@@ -1744,5 +1844,6 @@ function frame() {
 
 await Promise.all([buildTown(), addPeople(), addTraffic()]);
 addCats();
+addWishes();
 $('loading').classList.add('done');
 frame();

@@ -55,7 +55,14 @@
   .chip.found { border: 1px solid rgba(255, 255, 255, .35); text-shadow: 0 1px 2px rgba(0, 0, 0, .2); }
   .chip.pop { animation: pop .6s ease-out; }
   @keyframes pop { 0% { transform: scale(.4); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
+  .cats-row.wishes { grid-template-columns: repeat(5, 1fr); }
+  .cats-row.wishes .chip { font-size: 16px; }
   .cats-total { font-size: 12px; color: var(--dim); }
+  .banner { position: fixed; left: 50%; top: 22px; z-index: 7; padding: 10px 20px; border-radius: 999px;
+    font-size: 16px; font-weight: 800; color: #1d2230; background: #fffaf0; pointer-events: none;
+    box-shadow: 0 0 0 3px var(--glow, #ffd166), 0 8px 30px rgba(0, 0, 0, .35);
+    opacity: 0; transform: translate(-50%, -30px) scale(.9); transition: opacity .35s, transform .35s; }
+  .banner.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
   .heart { position: fixed; z-index: 6; font-size: 20px; pointer-events: none; animation: float 1.3s ease-out both;
     text-shadow: 0 1px 4px rgba(0, 0, 0, .3); }
   @keyframes float {
@@ -86,7 +93,7 @@
 <body>
 <div class="title">
   <h1>小鎮</h1>
-  <p>兩條街、三十位居民。點一下路上的人聽他說話；拖曳旋轉，滾輪縮放，右鍵平移。</p>
+  <p>點路上的人聽他說話，找出躲起來的貓，點噴水池許願。拖曳旋轉，滾輪縮放，右鍵平移。</p>
 </div>
 
 <div class="panel">
@@ -113,10 +120,14 @@
 </div>
 
 <div class="cats">
-  <div class="cats-head">貓咪圖鑑 <b id="cat-count">0/8</b></div>
+  <div class="cats-head">貓咪 <b id="cat-count">0/8</b></div>
   <div class="cats-row" id="cat-row"></div>
+  <div class="cats-head">祝福 <b id="wish-count">0/10</b></div>
+  <div class="cats-row wishes" id="wish-row"></div>
   <div class="cats-total" id="cat-total"></div>
 </div>
+
+<div id="banner" class="banner"></div>
 
 <div id="bubble" class="bubble" hidden><b></b><span></span><p></p></div>
 
