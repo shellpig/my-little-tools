@@ -24,6 +24,13 @@ const WALKERS = 26;
 const STROLLERS = 7;
 const STREET_HALF = 9;
 
+// Street cross-section along z: two lanes, each as wide as a sidewalk.
+const LANE = 0.8;
+const ROAD_HALF = LANE;
+const SIDEWALK = 0.8;
+const FRONTAGE = ROAD_HALF + SIDEWALK; // where building fronts and the park start
+const ROAD_END = 11;
+
 let seed = 11;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
@@ -41,9 +48,9 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0b1020, 14, 40);
 
 const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(7, 7.5, 12.5);
+camera.position.set(3.5, 7.5, 13);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.2, 1.4);
+controls.target.set(0, 0.2, 1.2);
 controls.enableDamping = true;
 controls.maxPolarAngle = 1.32;
 controls.minDistance = 3;
@@ -194,10 +201,11 @@ function paletteMaterial(textures, nightGlow) {
 // Building, road and suburban GLBs point at Textures/colormap.png, which the
 // packs ship as Models/Textures/variation-*.png. Their materials are replaced
 // after loading, so answer that request with a blank pixel instead of a 404.
+// The character and car packs ship a real colormap.png and keep it.
 const BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const manager = new THREE.LoadingManager();
 manager.setURLModifier(url =>
-  url.endsWith('Textures/colormap.png') && !url.includes('mini-characters') ? BLANK : url);
+  url.endsWith('Textures/colormap.png') && !/mini-characters|car-kit/.test(url) ? BLANK : url);
 const loader = new GLTFLoader(manager);
 const cache = new Map();
 
@@ -218,17 +226,24 @@ async function place(pack, name, { x = 0, y = 0, z = 0, rot = 0, scale = 1, mat 
   });
   obj.position.set(x, y, z);
   obj.rotation.y = rot;
-  obj.scale.setScalar(scale);
+  if (Array.isArray(scale)) obj.scale.set(...scale);
+  else obj.scale.setScalar(scale);
   scene.add(obj);
+  return obj;
+}
+
+// Slide a building along z so its front sits on the street frontage.
+function alignFront(obj) {
+  obj.position.z += -FRONTAGE - 0.02 - new THREE.Box3().setFromObject(obj).max.z;
   return obj;
 }
 
 // ---------- shops ----------
 
 const SHOPS = [
-  { model: 'building-c', x: -1.05, name: '晨光咖啡', bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a },
-  { model: 'building-a', x: 0, name: '小巷書店', bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f },
-  { model: 'building-h', x: 1.05, name: '便利商店', bg: '#f7f7f4', fg: '#1d6fd6', awning: 0x2c6fc4 },
+  { model: 'building-c', x: -1.72, name: '晨光咖啡', bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a },
+  { model: 'building-a', x: -2.72, name: '小巷書店', bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f },
+  { model: 'building-h', x: 1.72, name: '便利商店', bg: '#f7f7f4', fg: '#1d6fd6', awning: 0x2c6fc4 },
 ];
 
 function signTexture(text, bg, fg) {
@@ -288,11 +303,71 @@ function addAwning(x, front, width, color) {
   scene.add(canopy, valance);
 }
 
+// ---------- hotel and bus stop ----------
+
+const HOTEL = { model: 'building-n', name: '山嵐旅館', bg: '#1d2440', fg: '#f5d58a' };
+// Where hotel guests disappear inside, just under the entrance canopy.
+const HOTEL_DOOR = new THREE.Vector3(0, 0.05, -FRONTAGE + 0.06);
+
+// The bus pulls up in the westbound (north) lane with its centre at STOP_X;
+// the shelter stands at the curb with its back to the hotel.
+const STOP_X = 0.55;
+const SHELTER_X = 0.8;
+const SHELTER_Z = -(ROAD_HALF + 0.2);
+const SHELTER_SEATS = [-0.1, 0.1].map(dx => ({ position: new THREE.Vector3(SHELTER_X + dx, 0.07, SHELTER_Z + 0.02), rotation: 0 }));
+
+function decorateHotel(building) {
+  const bounds = new THREE.Box3().setFromObject(building);
+  const front = bounds.max.z;
+  const top = bounds.max.y;
+
+  // Rooftop sign on two posts.
+  const tex = signTexture(HOTEL.name, HOTEL.bg, HOTEL.fg);
+  const signMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, roughness: 0.5 });
+  glowing.push([signMat, 0.8]);
+  const iron = std(0x2c2f35, { roughness: 0.5, metalness: 0.5 });
+  box(1.4, 0.32, 0.04, signMat, 0, top + 0.26, front - 0.3, true);
+  for (const x of [-0.5, 0.5]) box(0.03, 0.12, 0.03, iron, x, top + 0.05, front - 0.3);
+
+  // Entrance canopy with a warm downlight, and a carpet to the curb side.
+  const canopy = std(0x3a3329, { roughness: 0.6, metalness: 0.3 });
+  const downlight = std(0x222222, { emissive: 0xffd49a, emissiveIntensity: 0 });
+  glowing.push([downlight, 2.5]);
+  box(0.74, 0.025, 0.34, canopy, 0, 0.36, front + 0.17, true);
+  box(0.6, 0.006, 0.26, downlight, 0, 0.345, front + 0.17);
+  for (const x of [-0.34, 0.34]) box(0.02, 0.31, 0.02, canopy, x, 0.2, front + 0.32, true);
+  box(0.3, 0.004, 0.3, std(0x9e2b2b), 0, 0.052, front + 0.15);
+}
+
+function buildBusStop() {
+  const frame = std(0x2c2f35, { roughness: 0.5, metalness: 0.5 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0xbfd8e8, roughness: 0.1, transparent: true, opacity: 0.35 });
+  const roofLight = std(0x222222, { emissive: 0xfff0d0, emissiveIntensity: 0 });
+  glowing.push([roofLight, 0.6]);
+  const back = SHELTER_Z - 0.08;
+
+  // Frame, glass back and end panels, roof with a light strip, and a bench.
+  for (const dx of [-0.3, 0.3]) box(0.018, 0.3, 0.018, frame, SHELTER_X + dx, 0.2, back, true);
+  box(0.6, 0.2, 0.006, glass, SHELTER_X, 0.18, back);
+  box(0.006, 0.2, 0.15, glass, SHELTER_X + 0.3, 0.18, SHELTER_Z);
+  box(0.66, 0.018, 0.22, frame, SHELTER_X, 0.355, SHELTER_Z, true);
+  box(0.5, 0.005, 0.06, roofLight, SHELTER_X, 0.344, SHELTER_Z);
+  box(0.42, 0.012, 0.06, std(0x8a5a3a), SHELTER_X, 0.1, SHELTER_Z - 0.03, true);
+  for (const dx of [-0.18, 0.18]) box(0.012, 0.05, 0.05, frame, SHELTER_X + dx, 0.075, SHELTER_Z - 0.03);
+
+  // Stop sign on a pole at the curb.
+  const tex = signTexture('公車站', '#1f6fb2', '#ffffff');
+  const signMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, roughness: 0.5 });
+  glowing.push([signMat, 0.6]);
+  cylinder(0.01, 0.01, 0.42, frame, SHELTER_X - 0.42, 0.26, -ROAD_HALF - 0.08, 8);
+  box(0.2, 0.05, 0.012, signMat, SHELTER_X - 0.42, 0.45, -ROAD_HALF - 0.08);
+}
+
 // ---------- park ----------
 
 // A fenced lawn south of the street: an entrance path leads to a ring path
 // around a fountain, with cross paths out to the side gates.
-const PARK = { cz: 4.2, ring: 1.45, xHalf: 4.6, zMin: 1.65, zMax: 7.2, path: 0.34 };
+const PARK = { cz: 4.5, ring: 1.45, xHalf: 4.6, zMin: FRONTAGE + 0.35, zMax: 7.5, path: 0.34 };
 
 // Benches sit outside the ring on the diagonals, facing the fountain.
 const BENCH_RADIUS = PARK.ring + 0.33;
@@ -372,8 +447,8 @@ function buildPark(jobs, plantMat) {
   ringPath.position.set(0, 0.022, cz);
   ringPath.receiveShadow = true;
   scene.add(ringPath);
-  const entrance = cz - ring - 1.3;
-  box(path, 0.012, entrance, gravel, 0, 0.022, 1.3 + entrance / 2);
+  const entrance = cz - ring - FRONTAGE;
+  box(path, 0.012, entrance, gravel, 0, 0.022, FRONTAGE + entrance / 2);
   for (const side of [-1, 1]) box(xHalf - ring, 0.012, path, gravel, side * (ring + xHalf) / 2, 0.022, cz);
 
   // Fountain: stone basin, water with underwater lights, a two-tier pedestal.
@@ -437,7 +512,7 @@ function buildPark(jobs, plantMat) {
   }
   for (let placed = 0; placed < 18;) {
     const x = -10 + rand() * 20;
-    const z = 1.8 + rand() * 7;
+    const z = FRONTAGE + 0.2 + rand() * 7;
     if (insidePark(x, z, 0.3)) continue;
     tree(x, z);
     placed++;
@@ -461,26 +536,31 @@ async function buildTown() {
   const pavement = std(0xb3ada3);
   const curb = std(0xd2ccc0);
   for (const side of [-1, 1]) {
-    box(60, 0.05, 0.8, pavement, 0, 0.025, side * 0.9);
-    box(60, 0.06, 0.06, curb, 0, 0.03, side * 0.53);
+    box(60, 0.05, SIDEWALK, pavement, 0, 0.025, side * (ROAD_HALF + SIDEWALK / 2));
+    box(60, 0.06, 0.06, curb, 0, 0.03, side * (ROAD_HALF + 0.03));
   }
 
   const jobs = [];
-  for (let x = -20; x <= 20; x++) jobs.push(place('roads', 'road-straight', { x, mat: roadMat }));
+  // Road tiles are 1 × 1; stretch them across to the two-lane width.
+  for (let x = -20; x <= 20; x++) jobs.push(place('roads', 'road-straight', { x, scale: [1, 1, ROAD_HALF * 2], mat: roadMat }));
 
-  // The three shops facing the street, each with an awning and a sign.
+  // The hotel in the middle, with the bus stop at its door.
+  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6) }).then(obj => decorateHotel(alignFront(obj))));
+  buildBusStop();
+
+  // The three shops either side of the hotel, each with an awning and a sign.
   SHOPS.forEach((shop, i) => jobs.push(
-    place('commercial', shop.model, { x: shop.x, z: -1.85, mat: shopMats[i] })
-      .then(obj => decorateShop(obj, shop))));
+    place('commercial', shop.model, { x: shop.x, mat: shopMats[i] })
+      .then(obj => decorateShop(alignFront(obj), shop))));
 
   // Neighbours along the street, then a skyline behind.
   const neighbours = ['building-b', 'building-d', 'building-e', 'building-f', 'building-g', 'building-i', 'building-j', 'building-k'];
-  [-2.3, -3.6, 2.3, 3.6, -5.0, 5.0].forEach((x, i) =>
-    jobs.push(place('commercial', neighbours[i % neighbours.length], { x, z: -1.9, mat: shopMats[(i + 1) % 3] })));
+  [-3.8, 2.75, 3.85, -4.95, 5.0, -6.1].forEach((x, i) =>
+    jobs.push(place('commercial', neighbours[i % neighbours.length], { x, mat: shopMats[(i + 1) % 3] }).then(alignFront)));
   for (let i = 0; i < 18; i++) {
     const name = `low-detail-building-${'abcdefghijklmn'[Math.floor(rand() * 14)]}`;
     jobs.push(place('commercial', name, {
-      x: -9 + rand() * 18, z: -4 - rand() * 5, rot: Math.floor(rand() * 4) * Math.PI / 2,
+      x: -9 + rand() * 18, z: -FRONTAGE - 3.2 - rand() * 5, rot: Math.floor(rand() * 4) * Math.PI / 2,
       scale: 0.55 + rand() * 0.35, mat: towerMats[Math.floor(rand() * 3)],
     }));
   }
@@ -491,8 +571,8 @@ async function buildTown() {
   // Street lamps, with a real light under each head.
   const bulbMat = std(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
   glowing.push([bulbMat, 6]);
-  for (const [x, side] of [[-4, -1], [-0.5, -1], [3, -1], [-2.3, 1], [1.3, 1], [4.8, 1]]) {
-    const z = side * 0.62;
+  for (const [x, side] of [[-3.3, -1], [-1.25, -1], [2.3, -1], [-2.3, 1], [1.3, 1], [4.8, 1]]) {
+    const z = side * (ROAD_HALF + 0.12);
     jobs.push(place('roads', 'light-square', { x, z, rot: side < 0 ? Math.PI : 0, mat: roadMat }));
     const head = new THREE.Vector3(x, 0.57, z - side * 0.19);
     box(0.06, 0.015, 0.06, bulbMat, head.x, head.y, head.z);
@@ -549,9 +629,16 @@ class Walker extends Person {
     this.dir = rand() < 0.5 ? 1 : -1;
     // Keep the two walking directions in separate lanes so people rarely overlap.
     const inner = this.dir * this.side > 0;
-    this.z = this.side * (inner ? 0.68 + rand() * 0.12 : 0.95 + rand() * 0.18);
+    this.z = this.side * (inner ? ROAD_HALF + 0.18 + rand() * 0.12 : ROAD_HALF + 0.45 + rand() * 0.18);
     this.x = x;
+    this.obj.position.z = this.z;
     this.face(this.dir * Math.PI / 2);
+  }
+
+  // Along the shelter, people on the curb side step over to the shop side.
+  laneZ() {
+    if (this.side > 0 || Math.abs(this.x - SHELTER_X) > 0.5) return this.z;
+    return Math.min(this.z, -(ROAD_HALF + 0.45));
   }
 
   update(dt, activity) {
@@ -569,14 +656,15 @@ class Walker extends Person {
     if (Math.abs(this.x) > STREET_HALF) {
       this.spawn(-Math.sign(this.x) * STREET_HALF);
       this.obj.visible = this.rank < activity;
-    } else if (this.side < 0 && Math.abs(this.x) < 1.6 && Math.random() < dt * 0.08) {
+    } else if (this.side < 0 && SHOPS.some(s => Math.abs(this.x - s.x) < 0.3) && Math.random() < dt * 0.15) {
       // Window shopping in front of the three shops.
       this.pause = 2 + Math.random() * 4;
       this.walk.fadeOut(0.3);
       this.idle.reset().fadeIn(0.3).play();
       this.face(Math.PI);
     }
-    this.obj.position.set(this.x, 0.05, this.z);
+    const p = this.obj.position;
+    p.set(this.x, 0.05, THREE.MathUtils.damp(p.z, this.laneZ(), 6, dt));
   }
 }
 
@@ -617,15 +705,237 @@ class Sitter extends Person {
   }
 }
 
+// Walks once from one point to another, then goes inside (is removed):
+// passengers getting off the bus into the hotel, or out to catch it.
+class Passenger extends Person {
+  constructor(gltf, from, to, delay) {
+    super(gltf, 0);
+    this.startWalking(0.3);
+    this.obj.position.copy(from);
+    this.obj.visible = false;
+    this.to = to;
+    this.delay = delay;
+  }
+
+  update(dt) {
+    if ((this.delay -= dt) > 0) return;
+    this.obj.visible = true;
+    this.mixer.update(dt);
+    const p = this.obj.position;
+    const dx = this.to.x - p.x;
+    const dz = this.to.z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.03) {
+      this.done = true;
+      scene.remove(this.obj);
+      return;
+    }
+    const step = Math.min(d, this.speed * dt);
+    p.x += dx / d * step;
+    p.z += dz / d * step;
+    this.face(Math.atan2(dx, dz));
+  }
+}
+
+let peopleGltfs = [];
+
 async function addPeople() {
-  const gltfs = await Promise.all(PEOPLE.map(n => model('mini-characters', n)));
+  const gltfs = peopleGltfs = await Promise.all(PEOPLE.map(n => model('mini-characters', n)));
   const pick = i => gltfs[i % gltfs.length];
   for (let i = 0; i < WALKERS; i++) walkers.push(new Walker(pick(i), i / WALKERS));
   for (let i = 0; i < STROLLERS; i++) walkers.push(new Stroller(pick(i + 5), i / STROLLERS));
   // Only some benches are taken, and people sit mostly in the daytime.
   benchSeats.filter((_, i) => i % 3 !== 2).forEach((seat, i) =>
     walkers.push(new Sitter(pick(i + 9), 0.3 + i * 0.12, seat)));
+  SHELTER_SEATS.forEach((seat, i) => walkers.push(new Sitter(pick(i + 3), 0.2 + i * 0.35, seat)));
   for (const w of walkers) w.obj.visible = w.rank < activity(time);
+}
+
+// ---------- traffic ----------
+
+// Right-hand traffic: eastbound (+x) in the south lane, westbound in the
+// north lane, which is the one passing the bus stop.
+const LANES = [{ z: -LANE / 2, dir: -1 }, { z: LANE / 2, dir: 1 }];
+const CARS = ['sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv'];
+const CAR_SCALE = 0.2;
+const BUS_LENGTH = 1.3;
+const BUS_WIDTH = 0.32;
+const BUS_DWELL = 7;
+const vehicles = [];
+
+// Vehicles are built facing +z and turned to their lane's direction.
+class Vehicle {
+  constructor(obj, lane, length, cruise, rank) {
+    Object.assign(this, { obj, lane, length, cruise, rank });
+    this.speed = 0;
+    this.x = 0;
+    this.onRoad = false;
+    this.cooldown = rand() * 8;
+    obj.rotation.y = lane.dir * Math.PI / 2;
+    obj.visible = false;
+    scene.add(obj);
+  }
+
+  desiredSpeed() { return this.cruise; }
+
+  enter() {
+    this.onRoad = true;
+    this.obj.visible = true;
+    this.x = -this.lane.dir * ROAD_END;
+    this.speed = this.cruise;
+  }
+
+  leave() {
+    this.onRoad = false;
+    this.obj.visible = false;
+    this.cooldown = 1 + Math.random() * 6;
+  }
+}
+
+class Bus extends Vehicle {
+  constructor(obj, lane) {
+    super(obj, lane, BUS_LENGTH, 0.8, 0);
+    this.cooldown = 2;
+  }
+
+  enter() {
+    super.enter();
+    this.state = 'arriving';
+  }
+
+  leave() {
+    super.leave();
+    this.cooldown = 12 + Math.random() * 8;
+  }
+
+  desiredSpeed(dt) {
+    if (this.state === 'arriving') {
+      const left = (STOP_X - this.x) * this.lane.dir;
+      if (left < 0.02 && this.speed < 0.05) {
+        this.state = 'dwelling';
+        this.wait = BUS_DWELL;
+        unloadBus(this);
+        return 0;
+      }
+      // Brake evenly so the bus comes to rest at the stop.
+      return Math.min(this.cruise, Math.sqrt(Math.max(left, 0)));
+    }
+    if (this.state === 'dwelling') {
+      if ((this.wait -= dt) <= 0) this.state = 'leaving';
+      return 0;
+    }
+    return this.cruise;
+  }
+}
+
+// A few riders step off at the front door and walk into the hotel, and a
+// guest or two come out to board.
+function unloadBus(bus) {
+  if (!peopleGltfs.length) return;
+  const door = new THREE.Vector3(bus.x + bus.lane.dir * (BUS_LENGTH / 2 - 0.22), 0.05, -ROAD_HALF - 0.06);
+  const pick = () => peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
+  const off = 1 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < off; i++) walkers.push(new Passenger(pick(), door, HOTEL_DOOR, 0.6 + i * 0.9));
+  const on = Math.floor(Math.random() * 3);
+  for (let i = 0; i < on; i++) walkers.push(new Passenger(pick(), HOTEL_DOOR, door, i * 1.2));
+}
+
+function lightPair(group, mat, x, y, z) {
+  for (const sx of [-x, x]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.025, 0.01), mat);
+    m.position.set(sx, y, z);
+    group.add(m);
+  }
+}
+
+function makeCar(gltf, headMat, tailMat) {
+  const group = new THREE.Group();
+  const body = gltf.scene.clone(true);
+  body.scale.setScalar(CAR_SCALE);
+  body.traverse(o => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  group.add(body);
+  const b = new THREE.Box3().setFromObject(body);
+  const half = b.max.z;
+  lightPair(group, headMat, b.max.x * 0.6, b.max.y * 0.3, half + 0.004);
+  lightPair(group, tailMat, b.max.x * 0.6, b.max.y * 0.3, -half - 0.004);
+  return { group, length: half * 2 };
+}
+
+// The city bus: green lower body, a window band lit from inside at night,
+// white roof, front door on the curb (−x) side and four Car Kit wheels.
+function makeBus(wheel, headMat, tailMat) {
+  const g = new THREE.Group();
+  const L = BUS_LENGTH;
+  const W = BUS_WIDTH;
+  const paint = std(0x2e8b74, { roughness: 0.5 });
+  const white = std(0xf2f0ea, { roughness: 0.5 });
+  const glass = std(0x1c2a36, { roughness: 0.15, metalness: 0.3, emissive: 0xffe2b0, emissiveIntensity: 0 });
+  glowing.push([glass, 0.6]);
+  const sign = std(0x222222, { emissive: 0xffb347, emissiveIntensity: 0 });
+  glowing.push([sign, 2]);
+  const part = (w, h, d, mat, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    m.castShadow = m.receiveShadow = true;
+    g.add(m);
+  };
+  part(W, 0.15, L, paint, 0, 0.13, 0);
+  part(W - 0.004, 0.13, L - 0.004, glass, 0, 0.27, 0);
+  for (let k = 0; k < 6; k++) part(W + 0.006, 0.13, 0.025, white, 0, 0.27, -L / 2 + 0.06 + k * (L - 0.24) / 5);
+  part(W, 0.06, L, white, 0, 0.365, 0);
+  part(W * 0.7, 0.04, 0.35, white, 0, 0.415, -0.2);
+  part(W * 0.7, 0.035, 0.01, sign, 0, 0.365, L / 2 + 0.003);
+  part(0.006, 0.24, 0.14, glass, -W / 2 - 0.004, 0.18, L / 2 - 0.22);
+  lightPair(g, headMat, 0.11, 0.1, L / 2 + 0.004);
+  lightPair(g, tailMat, 0.11, 0.1, -L / 2 - 0.004);
+  for (const z of [L / 2 - 0.25, -L / 2 + 0.25]) {
+    for (const x of [-(W / 2 - 0.03), W / 2 - 0.03]) {
+      const w = wheel.scene.clone(true);
+      w.scale.setScalar(0.18);
+      w.position.set(x, 0.055, z);
+      w.traverse(o => { if (o.isMesh) o.castShadow = true; });
+      g.add(w);
+    }
+  }
+  return g;
+}
+
+async function addTraffic() {
+  const headMat = std(0x222222, { emissive: 0xfff4d6, emissiveIntensity: 0 });
+  const tailMat = std(0x441111, { emissive: 0xff3a2a, emissiveIntensity: 0 });
+  glowing.push([headMat, 4], [tailMat, 2.5]);
+  const [wheel, ...cars] = await Promise.all(['wheel-default', ...CARS].map(n => model('car-kit', n)));
+  cars.forEach((gltf, i) => {
+    const { group, length } = makeCar(gltf, headMat, tailMat);
+    vehicles.push(new Vehicle(group, LANES[i % 2], length, 0.9 + rand() * 0.35, i / cars.length));
+  });
+  vehicles.push(new Bus(makeBus(wheel, headMat, tailMat), LANES[0]));
+}
+
+// Each lane is a queue: everyone drives at their own pace but brakes to keep
+// a gap behind the vehicle ahead, so cars wait behind the bus at its stop.
+function updateTraffic(dt, activity) {
+  for (const v of vehicles) if (!v.onRoad) v.cooldown -= dt;
+  for (const lane of LANES) {
+    const queue = vehicles.filter(v => v.lane === lane && v.onRoad).sort((a, b) => (b.x - a.x) * lane.dir);
+    queue.forEach((v, i) => {
+      let target = v.desiredSpeed(dt);
+      const ahead = queue[i - 1];
+      if (ahead) {
+        const gap = (ahead.x - v.x) * lane.dir - (ahead.length + v.length) / 2;
+        target = Math.min(target, Math.max(0, (gap - 0.15) * 1.2));
+      }
+      v.speed += THREE.MathUtils.clamp(target - v.speed, -1.5 * dt, 0.5 * dt);
+      v.x += v.speed * lane.dir * dt;
+      v.obj.position.set(v.x, 0.02, lane.z);
+      if (v.x * lane.dir > ROAD_END) v.leave();
+    });
+    // Let the next waiting vehicle in once the start of the lane is clear.
+    const last = queue.filter(v => v.onRoad).at(-1);
+    if (last && last.x * lane.dir < -ROAD_END + last.length + 0.8) continue;
+    const next = vehicles.find(v => v.lane === lane && !v.onRoad && v.cooldown <= 0 && v.rank < activity);
+    if (next) next.enter();
+  }
 }
 
 // ---------- time of day ----------
@@ -732,12 +1042,14 @@ function frame() {
   applyTime(time);
   const a = activity(time);
   for (const w of walkers) w.update(dt, a);
+  for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
+  updateTraffic(dt, a);
   controls.update();
   updateUI();
   composer.render();
   requestAnimationFrame(frame);
 }
 
-await Promise.all([buildTown(), addPeople()]);
+await Promise.all([buildTown(), addPeople(), addTraffic()]);
 $('loading').classList.add('done');
 frame();
