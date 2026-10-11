@@ -1244,7 +1244,7 @@ async function addPeople() {
 // the side it came in by to the side it leaves by, keeping right. At a
 // junction it picks a way at random, mostly straight on, and turns back at a
 // dead end. Only one car is in a junction at a time. Cars come in out of the
-// fog at either end of the streets and leave past the last column. The bus
+// fog at either end of the streets and leave past their last column. The bus
 // runs the main street westbound.
 const CARS = ['sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv',
   'van', 'hatchback-sports', 'sedan', 'truck'];
@@ -1254,7 +1254,6 @@ const BUS_LENGTH = 1.3;
 const BUS_WIDTH = 0.32;
 const BUS_DWELL = 7;
 const STREET_ENTRY = 7; // street column where cars come in, at the edge of the fog
-const STREET_EXIT = 12; // the last street column; past it cars leave
 const LOOK_AHEAD = 2.5;
 const JUNCTION_RUN = 4; // most junctions in a row a car claims at once
 const vehicles = [];
@@ -1277,14 +1276,15 @@ function buildRoads() {
     roads.get(b).links.set(opposite(side), a);
   };
   STREETS.forEach((street, k) => {
-    for (let i = -STREET_EXIT; i <= STREET_EXIT; i++) {
+    const [lo, hi] = streetSpan(k);
+    for (let i = lo; i <= hi; i++) {
       node(`s${k},${i}`, i * CELL, street, ROAD_HALF, ROAD_HALF);
-      if (i > -STREET_EXIT) link(`s${k},${i - 1}`, EAST, `s${k},${i}`);
+      if (i > lo) link(`s${k},${i - 1}`, EAST, `s${k},${i}`);
     }
-    roads.get(`s${k},${-STREET_EXIT}`).links.set(WEST, 'exit');
-    roads.get(`s${k},${STREET_EXIT}`).links.set(EAST, 'exit');
+    roads.get(`s${k},${lo}`).links.set(WEST, 'exit');
+    roads.get(`s${k},${hi}`).links.set(EAST, 'exit');
   });
-  const cells = [...tiles].filter(([, kind]) => kind === 'road').map(([key]) => key.split(',').map(Number));
+  const cells = gridCells().filter(([, , kind]) => kind === 'road');
   for (const [i, j] of cells) {
     const z = j * CELL;
     if (!halfCell(j)) {
@@ -1304,7 +1304,7 @@ function buildRoads() {
     for (const [side, edge] of [[NORTH, z - ROAD_HALF], [SOUTH, z + ROAD_HALF]]) {
       const k = STREETS.findIndex(s => Math.abs(edge - s) <= ROAD_HALF + 1e-6);
       if (k >= 0) {
-        if (Math.abs(i) <= STREET_EXIT) link(key, side, `s${k},${i}`);
+        if (roads.has(`s${k},${i}`)) link(key, side, `s${k},${i}`);
       } else if (side === SOUTH && roads.has(cellKey(i, j + 1))) {
         link(key, SOUTH, cellKey(i, j + 1));
       }
@@ -3011,9 +3011,11 @@ renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preven
 // the old streets included, and a road crossing a street's pavement cuts it.
 // Cells inside a street can't be painted; the back street sits half a cell
 // off the grid, so the cells beside it overlap it and stop at its edge.
+// A street can be made longer, a column at a time, past either end.
 const CELL = ROAD_HALF * 2;
-const STREET_END = 20.5;
-const tiles = new Map(); // "i,j" → 'road' | 'walk'
+const STREET_COLS = 12; // the streets run over columns −12…12, to x = ±20
+const MAX_COL = 18; // and can be made longer up to here, inside the pavements
+const tiles = new Map(); // "i,j" → 'road' | 'walk'; a street's extra columns "s<k>,<i>" → 'road'
 const tileGroup = new THREE.Group();
 const kerbs = new THREE.Group();
 scene.add(tileGroup, kerbs);
@@ -3034,14 +3036,29 @@ for (const [piece, open] of PIECES) {
 const streetGap = z => Math.min(...STREETS.map(s => Math.abs(z - s)));
 const paveable = j => streetGap(j * CELL) > ROAD_HALF - 1e-6;
 const halfCell = j => streetGap(j * CELL) < CELL - 1e-6;
-// Does a street lie on or across this line of z?
-const streetAt = z => STREETS.some(s => Math.abs(z - s) <= ROAD_HALF + 1e-6);
+// The painted grid cells as [i, j, kind], leaving out the street extensions.
+const gridCells = () => [...tiles].filter(([key]) => key[0] !== 's').map(([key, kind]) => [...key.split(',').map(Number), kind]);
+
+// The columns street k runs over, its extensions included.
+function streetSpan(k) {
+  let lo = -STREET_COLS;
+  let hi = STREET_COLS;
+  while (tiles.has(`s${k},${hi + 1}`)) hi++;
+  while (tiles.has(`s${k},${lo - 1}`)) lo--;
+  return [lo, hi];
+}
+
+// Does a street in column i lie on or across this line of z?
+const streetAt = (z, i) => STREETS.some((s, k) => {
+  const [lo, hi] = streetSpan(k);
+  return Math.abs(z - s) <= ROAD_HALF + 1e-6 && i >= lo && i <= hi;
+});
 
 function roadSides(i, j) {
   const road = (a, b) => tiles.get(cellKey(a, b)) === 'road';
   const z = j * CELL;
-  return (road(i, j - 1) || streetAt(z - ROAD_HALF) ? NORTH : 0) | (road(i + 1, j) ? EAST : 0)
-    | (road(i, j + 1) || streetAt(z + ROAD_HALF) ? SOUTH : 0) | (road(i - 1, j) ? WEST : 0);
+  return (road(i, j - 1) || streetAt(z - ROAD_HALF, i) ? NORTH : 0) | (road(i + 1, j) ? EAST : 0)
+    | (road(i, j + 1) || streetAt(z + ROAD_HALF, i) ? SOUTH : 0) | (road(i - 1, j) ? WEST : 0);
 }
 
 function roadPiece(gltf) {
@@ -3060,8 +3077,7 @@ async function drawTiles() {
   const gltfs = Object.fromEntries(await Promise.all(PIECES.map(async ([p]) => [p, await model('roads', p)])));
   if (job !== paveJob) return;
   tileGroup.clear();
-  for (const [key, kind] of tiles) {
-    const [i, j] = key.split(',').map(Number);
+  for (const [i, j, kind] of gridCells()) {
     const x = i * CELL;
     const z = j * CELL;
     if (kind === 'walk') {
@@ -3090,11 +3106,11 @@ async function drawTiles() {
 
   // The streets: straight between junctions, and a T (or a crossing, with
   // roads on both sides) where painted roads join them.
-  for (const street of STREETS) {
+  STREETS.forEach((street, k) => {
+    const [lo, hi] = streetSpan(k);
     const joins = new Map(); // cell column → sides with a road
-    for (const [key, kind] of tiles) {
-      if (kind !== 'road') continue;
-      const [i, j] = key.split(',').map(Number);
+    for (const [i, j, kind] of gridCells()) {
+      if (kind !== 'road' || i < lo || i > hi) continue;
       const z = j * CELL;
       if (z < street && Math.abs(z + ROAD_HALF - street) <= ROAD_HALF + 1e-6) joins.set(i, (joins.get(i) ?? 0) | NORTH);
       if (z > street && Math.abs(z - ROAD_HALF - street) <= ROAD_HALF + 1e-6) joins.set(i, (joins.get(i) ?? 0) | SOUTH);
@@ -3105,7 +3121,8 @@ async function drawTiles() {
       obj.scale.set(b - a, 1, CELL);
       tileGroup.add(obj);
     };
-    let from = -STREET_END;
+    const end = hi * CELL + ROAD_HALF;
+    let from = lo * CELL - ROAD_HALF;
     for (const i of [...joins.keys()].sort((a, b) => a - b)) {
       const a = i * CELL - ROAD_HALF;
       if (a > from) straight(from, a);
@@ -3117,8 +3134,8 @@ async function drawTiles() {
       tileGroup.add(obj);
       from = a + CELL;
     }
-    if (from < STREET_END) straight(from, STREET_END);
-  }
+    if (from < end) straight(from, end);
+  });
   buildRoads();
 }
 
@@ -3129,7 +3146,7 @@ function paveSidewalks() {
     for (const side of [-1, 1]) {
       const inner = street + side * ROAD_HALF;
       const outer = street + side * FRONTAGE;
-      const gaps = [...tiles].filter(([, kind]) => kind === 'road').map(([key]) => key.split(',').map(Number))
+      const gaps = gridCells().filter(([, , kind]) => kind === 'road')
         .filter(([, j]) => Math.min(inner, outer) < j * CELL + ROAD_HALF && Math.max(inner, outer) > j * CELL - ROAD_HALF)
         .map(([i]) => [i * CELL - ROAD_HALF, i * CELL + ROAD_HALF]).sort((a, b) => a[0] - b[0]);
       let from = -30;
@@ -3222,6 +3239,8 @@ function setBrush(b) {
 function paintAt(at) {
   const i = Math.round(at.x / CELL);
   const j = Math.round(at.z / CELL);
+  const k = STREETS.findIndex(st => Math.abs(at.z - st) <= ROAD_HALF);
+  if (k >= 0 && brush !== 'zebra') return paintStreet(k, i);
   const zebra = brush === 'zebra' ? zebraAt(at, i, j) : null;
   const ok = brush === 'erase' || (brush === 'zebra' ? !!zebra : paveable(j));
   brushMark.position.set(zebra ? zebra.x : i * CELL, 0.07, zebra ? zebra.z : j * CELL);
@@ -3238,6 +3257,30 @@ function paintAt(at) {
   if (tiles.get(key) === want) return;
   if (want) tiles.set(key, want);
   else tiles.delete(key);
+  drawTiles();
+  paveSidewalks();
+}
+
+// On a street the road brush adds a column just past its end, and the
+// erase brush takes it back to the column before (and any crossings there).
+function paintStreet(k, i) {
+  const [lo, hi] = streetSpan(k);
+  const out = i > hi ? i - hi : lo - i; // columns past the end
+  const extra = Math.abs(i) > STREET_COLS && i >= lo && i <= hi;
+  const ok = brush === 'road' ? out <= 1 && Math.abs(i) <= MAX_COL : brush === 'erase';
+  brushMark.position.set(i * CELL, 0.07, STREETS[k]);
+  brushMark.material.color.setHex(ok ? 0x3ec8ff : 0xff5a5a);
+  brushMark.visible = true;
+  if (!stroke || !ok) return;
+  const near = zb => !zb.ns && zb.z === STREETS[k] && Math.abs(zb.x - i * CELL) <= CELL / 2 + 1e-6;
+  if (brush === 'erase' && zebras.some(near)) setZebras(zebras.filter(zb => !near(zb)));
+  if (brush === 'road' && out === 1) {
+    tiles.set(`s${k},${i}`, 'road');
+  } else if (brush === 'erase' && extra) {
+    for (let c = i; c >= lo && c <= hi; c += Math.sign(i)) tiles.delete(`s${k},${c}`);
+  } else {
+    return;
+  }
   drawTiles();
   paveSidewalks();
 }
