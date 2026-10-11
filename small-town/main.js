@@ -12,6 +12,7 @@ import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
 import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
 import { LEVELS, levelById } from './levels/index.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
+import { buildRail, RAIL_TOP } from './rail.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -133,6 +134,11 @@ const PARKING_STALLS = LOT ? [-1, 1].flatMap(row =>
 const WALKERS = LEVEL.walkers;
 const STROLLERS = LEVEL.strollers;
 
+// P1-C railway: fixed cells from the level (town has none). The set marks
+// cells no brush may cover; the live handle stays null without rail.
+let rail = null;
+const railCells = new Set((LEVEL.rail ? LEVEL.rail.cells : []).map(([i, j]) => cellKey(i, j)));
+
 let seed = 11;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
@@ -228,7 +234,8 @@ const lamps = [];
 const solids = [];
 const posts = [];
 const solid = (x, z, hw, hd) => solids.push({ minX: x - hw, maxX: x + hw, minZ: z - hd, maxZ: z + hd });
-const post = (x, z, r) => posts.push({ x, z, r });
+// Returns the entry so rail barriers can lift it again when edited away.
+const post = (x, z, r) => posts[posts.push({ x, z, r }) - 1];
 function solidOf(obj) {
   const b = new THREE.Box3().setFromObject(obj);
   solids.push({ minX: b.min.x + 0.02, maxX: b.max.x - 0.02, minZ: b.min.z + 0.02, maxZ: b.max.z - 0.02 });
@@ -375,7 +382,7 @@ const bedtime = (from, to) => (from + rand() * ((to - from + 24) % 24)) % 24;
 const BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const manager = new THREE.LoadingManager();
 manager.setURLModifier(url =>
-  url.endsWith('Textures/colormap.png') && !/mini-characters|car-kit/.test(url) ? BLANK : url);
+  url.endsWith('Textures/colormap.png') && !/mini-characters|car-kit|train-kit/.test(url) ? BLANK : url);
 const loader = new GLTFLoader(manager);
 const cache = new Map();
 
@@ -729,6 +736,18 @@ function buildPark(jobs, plantMat) {
 }
 
 // ---------- town layout ----------
+
+// P1-C: with rail data, lay the tracks, the train and the crossings after
+// the town exists (so tiles and roads are real) but before the layout's
+// painted roads land. Without rail data this is a no-op: nothing loads,
+// nothing renders, rand() is untouched.
+async function initRail() {
+  if (!LEVEL.rail) return;
+  rail = await buildRail({
+    LEVEL, CELL, scene, tiles, roads, posts,
+    model, place, post, dirOf,
+  });
+}
 
 async function buildTown() {
   const [commercial, suburban, roads] = await Promise.all(['commercial', 'suburban', 'roads'].map(palette));
@@ -1238,12 +1257,17 @@ class Walker extends Person {
     const d = Math.hypot(dx, dz);
     const step = this.speed * dt;
     if (d <= Math.max(step, 0.03)) {
+      // A shut crossing holds back whoever is still outside it.
+      if (rail && rail.shouldWait(p.x, p.z, t.x, t.z)) return false;
       p.set(t.x, 0.05, t.z);
       this.seg++;
       return this.seg >= this.pts.length;
     }
-    p.x += dx / d * step;
-    p.z += dz / d * step;
+    const nx = p.x + dx / d * step;
+    const nz = p.z + dz / d * step;
+    if (rail && rail.shouldWait(p.x, p.z, nx, nz)) return false;
+    p.x = nx;
+    p.z = nz;
     p.y = 0.05;
     this.face(Math.atan2(dx, dz));
     return false;
@@ -1348,6 +1372,8 @@ class Stroller extends Person {
     if (this.state === 'walking' && home) this.state = 'leaving';
     const c = Math.cos(this.angle);
     const s = Math.sin(this.angle);
+    const pa = this.angle;
+    const pr = this.r;
     if (this.state === 'walking') {
       this.angle += this.dir * this.speed / this.radius * dt;
       this.face(Math.atan2(-s * this.dir, c * this.dir));
@@ -1367,7 +1393,15 @@ class Stroller extends Person {
       const out = this.state === 'leaving' ? 1 : -1;
       this.face(Math.atan2(c * out, s * out));
     }
-    this.obj.position.set(Math.cos(this.angle) * this.r, 0.03, PARK.cz + Math.sin(this.angle) * this.r);
+    const nx = Math.cos(this.angle) * this.r;
+    const nz = PARK.cz + Math.sin(this.angle) * this.r;
+    // Whoever is already on a shut crossing walks off; the rest hold back.
+    if (rail && rail.shouldWait(this.obj.position.x, this.obj.position.z, nx, nz)) {
+      this.angle = pa;
+      this.r = pr;
+      return;
+    }
+    this.obj.position.set(nx, 0.03, nz);
   }
 }
 
@@ -1422,12 +1456,17 @@ class Passenger extends Person {
     const dz = t.z - p.z;
     const d = Math.hypot(dx, dz);
     if (d < 0.03) {
+      if (rail && rail.shouldWait(p.x, p.z, t.x, t.z)) return;
       this.seg++;
       return;
     }
     const step = Math.min(d, this.speed * dt);
-    p.x += dx / d * step;
-    p.z += dz / d * step;
+    const nx = p.x + dx / d * step;
+    const nz = p.z + dz / d * step;
+    // A shut crossing holds back whoever is still outside it.
+    if (rail && rail.shouldWait(p.x, p.z, nx, nz)) return;
+    p.x = nx;
+    p.z = nz;
     p.y = 0.05;
     this.face(Math.atan2(dx, dz));
   }
@@ -1522,6 +1561,8 @@ class Resident extends Person {
       return { legs, end: at };
     };
     this.legs = run(run(this.home).end).legs;
+    // Crossing waits delay the personal day plan, including later legs.
+    this.waitH = 0;
   }
 
   speech() {
@@ -1531,16 +1572,41 @@ class Resident extends Person {
   update(dt) {
     this.walk.timeScale = Math.min(speed / 60, 4);
     this.mixer.update(dt);
-    const leg = this.legs.findLast(l => l.start <= time) ?? this.legs.at(-1);
-    let walked = ((time - leg.start + 24) % 24) * WALK_SPEED;
+    const personalTime = rail ? ((time - this.waitH) % 24 + 24) % 24 : time;
+    const leg = this.legs.findLast(l => l.start <= personalTime) ?? this.legs.at(-1);
+    const gameDt = dt * speed / 3600;
+    const locate = walked => {
+      let k = 0;
+      let rest = walked;
+      while (rest > leg.lengths[k]) rest -= leg.lengths[k++];
+      return { k, rest };
+    };
+    const walked = ((personalTime - leg.start + 24) % 24) * WALK_SPEED;
     const p = this.obj.position;
+    if (rail && leg.length) {
+      const previous = locate(Math.min(Math.max(0, walked - gameDt * WALK_SPEED), leg.length - 1e-9));
+      const next = locate(Math.min(walked, leg.length - 1e-9));
+      const a = leg.pts[next.k], b = leg.pts[next.k + 1];
+      const f = next.rest / leg.lengths[next.k];
+      const target = { x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f };
+      let at = p;
+      let blocked = false;
+      for (let k = previous.k + 1; k <= next.k; k++) {
+        const to = leg.pts[k];
+        if (rail.shouldWait(at.x, at.z, to.x, to.z)) { blocked = true; break; }
+        at = to;
+      }
+      if (blocked || rail.shouldWait(at.x, at.z, target.x, target.z)) {
+        this.waitH += gameDt;
+        return;
+      }
+    }
     if (walked < leg.length) {
       // On the way: find the segment and the point along it.
-      let k = 0;
-      while (walked > leg.lengths[k]) walked -= leg.lengths[k++];
+      const { k, rest } = locate(walked);
       const a = leg.pts[k];
       const b = leg.pts[k + 1];
-      p.lerpVectors(a, b, leg.lengths[k] ? walked / leg.lengths[k] : 1);
+      p.lerpVectors(a, b, leg.lengths[k] ? rest / leg.lengths[k] : 1);
       this.face(Math.atan2(b.x - a.x, b.z - a.z));
       this.obj.visible = true;
     } else if (leg.to.park && !leg.stuck) {
@@ -1645,6 +1711,7 @@ function buildRoads() {
     }
   }
   computeBusRoute();
+  if (rail) rail.refreshCrossings();
   for (const v of vehicles) if (v.onRoad) v.replan();
 }
 
@@ -1835,8 +1902,9 @@ class Vehicle {
   }
 
   // Keep a gap to whatever is in the cone ahead: cars, people in the road,
-  // a crossing someone is on, and a junction it can't have yet.
-  drive(dt, people, busy) {
+  // a crossing someone is on, a shut level crossing, and a junction it
+  // can't have yet.
+  drive(dt, people, busy, shut = []) {
     let target = this.desiredSpeed(dt);
     const brake = gap => { target = Math.min(target, Math.max(0, gap)); };
     const h = this.heading;
@@ -1867,9 +1935,14 @@ class Vehicle {
       const gap = rx * h.x + rz * h.z - zb.w / 2 - this.length / 2 - 0.08;
       if (gap > -0.05 && gap < LOOK_AHEAD) brake(gap * 1.5);
     }
+    // Stop before a shut crossing; vehicles already inside must leave it.
     if (this.path.length < 2) this.extend();
     const seg = this.path[0];
     const next = this.path[1];
+    if (!next.exit && shut.some(c => c.key === next.node.key)) {
+      const gap = seg.curve.len - this.s - this.length / 2;
+      if (gap > 0) brake(Math.max(0, gap - 0.15) * 1.2);
+    }
     // Claim it only at the front of the queue, close to the junction.
     const toJunction = seg.curve.len - this.s;
     const blocked = !next.exit && isJunction(next.node) && !this.held.includes(next.node)
@@ -2142,8 +2215,9 @@ function updateTraffic(dt, activity) {
   const people = walkers.filter(w => w.obj.visible).map(w => w.obj.position);
   if (player.active) people.push(player.pos);
   const busy = zebras.filter(zb => people.some(p => onZebra(zb, p)));
+  const shut = rail ? rail.closedCells() : [];
   for (const v of vehicles) {
-    if (v.onRoad) v.drive(dt, people, busy);
+    if (v.onRoad) v.drive(dt, people, busy, shut);
     else v.cooldown -= dt;
   }
   for (const v of vehicles) {
@@ -2288,10 +2362,11 @@ function updateUI() {
 
 // Midnight wrapping in the main loop, or a jump backwards from a preset or
 // the slider, turns the game day over: the found cats queue up to hide again.
-function setTime(next) {
+function setTime(next, continuous = false) {
   next %= 24;
   if (next < time) startNewDay();
   time = next;
+  if (rail && !continuous) for (const w of walkers) if (w instanceof Resident) w.waitH = 0;
 }
 
 // ---------- cats ----------
@@ -2760,6 +2835,7 @@ const overview = { pos: camera.position.clone(), target: controls.target.clone()
 
 // Road, sidewalks, paths and park paths sit a little above the grass.
 function groundHeight(x, z) {
+  if (railCells.has(cellKey(Math.round(x / CELL), Math.round(z / CELL)))) return RAIL_TOP;
   const tile = tiles.get(cellKey(Math.round(x / CELL), Math.round(z / CELL)));
   if (tile) return tile === 'walk' ? 0.05 : 0.02;
   // The automatic sidewalks ringing each road tile.
@@ -3799,7 +3875,10 @@ const inCell = (zb, i, j) => Math.abs(zb.x - i * CELL) <= CELL / 2 + 1e-6 && Mat
 function setTiles(cells) {
   tiles.clear();
   const src = cells === undefined ? defaultTilesObj(LEVEL) : cells;
-  for (const [key, kind] of Object.entries(src)) tiles.set(key, kind);
+  for (const [key, kind] of Object.entries(src)) {
+    if (kind === 'walk' && railCells.has(key)) continue;
+    tiles.set(key, kind);
+  }
   drawTiles();
   paveSidewalks();
 }
@@ -3848,7 +3927,10 @@ function paintAt(at) {
     return;
   }
   const zebra = brush === 'zebra' ? zebraAt(at, i, j) : null;
-  const ok = brush === 'erase' || (brush === 'zebra' ? !!zebra : true);
+  // Rails are fixed: no brush paints over them, but a road may cross them
+  // (a new crossing) and erase may lift a crossing road again.
+  const onRail = railCells.has(cellKey(i, j));
+  const ok = brush === 'erase' || (brush === 'zebra' ? !!zebra && !onRail : brush === 'road' ? true : !onRail);
   brushMark.position.set(zebra ? zebra.x : i * CELL, 0.07, zebra ? zebra.z : j * CELL);
   brushMark.material.color.setHex(ok ? 0x3ec8ff : 0xff5a5a);
   brushMark.visible = true;
@@ -4096,9 +4178,10 @@ $('edit-reset').addEventListener('click', () => {
 const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
-  setTime(time + dt * speed / 3600);
+  setTime(time + dt * speed / 3600, true);
   applyTime(time);
   const a = Math.min(1, activity(time) + crowdBoost);
+  if (rail) rail.update(dt, dt * speed, activity(time), player.active ? player.pos : null);
   for (const w of walkers) w.update(dt, a);
   for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
   updateTraffic(dt, a);
@@ -4115,6 +4198,7 @@ function frame() {
 // The layout (tiles, zebras, editables) lands before any people plan their
 // walks, so the first plans already see the real walk grid.
 await buildTown();
+await initRail();
 await applyLayout();
 await Promise.all([addPeople(), addTraffic()]);
 addCats();

@@ -91,5 +91,6 @@ export default {
     [3.2, 8.1], [-6.5, 8.7], [-3.4, 6.1],
   ],
   wishes: true,
+  rail: null,
   camera: { target: [0, 0.2, -2.2], position: [4, 12, 13] },
 };
