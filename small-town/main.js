@@ -126,6 +126,7 @@ const HOMES = LEVEL.homes;
 const SHOPS = LEVEL.shops;
 const CIVIC = LEVEL.civic;
 const HOTEL = LEVEL.hotel;
+const STATION = LEVEL.station;
 const PARK = LEVEL.park;
 const GAS = LEVEL.gas;
 const LOT = LEVEL.parking && LEVEL.gas ? { x: 8, z: LEVEL.gas.z } : null;
@@ -153,9 +154,12 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0b1020, 20, 70);
+// How far the overview camera may pull back, the fog band and the sun's
+// shadow reach all come from the level.
+const VIEW = LEVEL.view;
+scene.fog = new THREE.Fog(0x0b1020, ...VIEW.fog);
 
-const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, VIEW.fog[1] + 50);
 camera.position.set(...LEVEL.camera.position);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
@@ -164,12 +168,12 @@ controls.target.set(...LEVEL.camera.target);
 controls.enableDamping = true;
 controls.maxPolarAngle = 1.32;
 controls.minDistance = 3;
-controls.maxDistance = 40;
+controls.maxDistance = VIEW.maxDistance;
 
 const sun = new THREE.DirectionalLight(0xffffff, 2);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
-Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 80 });
+Object.assign(sun.shadow.camera, { left: -VIEW.shadow, right: VIEW.shadow, top: VIEW.shadow, bottom: -VIEW.shadow, near: 1, far: 80 });
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.01;
 scene.add(sun, sun.target);
@@ -496,6 +500,7 @@ function addAwning(parent, width, color) {
 // Where people disappear inside: under the hotel canopy. HOTEL is null on
 // levels without one; the door formula matches the town's hotel front.
 const HOTEL_DOOR = new THREE.Vector3(0, 0.05, -FRONTAGE + 0.06);
+const STATION_DOOR = STATION ? new THREE.Vector3(STATION.x, 0.05, STATION.front + STATION.facing * 0.1) : null;
 
 // The bus stop and its shelter come from the level; both stay empty without a bus.
 const STOP_X = LEVEL.bus ? LEVEL.busStop.x : 0;
@@ -530,6 +535,61 @@ function decorateHotel(building) {
     post(x, front + 0.32, 0.03);
   }
   box(0.3, 0.004, 0.3, std(0x9e2b2b), 0, 0.052, front + 0.15);
+}
+
+function decorateStation(building, station) {
+  const bounds = new THREE.Box3().setFromObject(building);
+  const front = bounds.min.z;
+  const back = bounds.max.z;
+  const top = bounds.max.y;
+  const width = bounds.max.x - bounds.min.x;
+
+  const tex = signTexture(station.name, station.bg, station.fg);
+  const signMat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, roughness: 0.6 });
+  glowing.push([signMat, 0.6]);
+
+  // Entrance sign over north facade and rooftop sign on two posts
+  box(Math.min(width * 0.8, 1.4), 0.24, 0.02, signMat, station.x, 0.65, front - 0.012);
+  const darkFrame = std(0x2c2f35, { roughness: 0.5, metalness: 0.5 });
+  box(1.4, 0.32, 0.04, signMat, station.x, top + 0.26, (front + back) / 2, true);
+  for (const dx of [-0.5, 0.5]) box(0.03, 0.12, 0.03, darkFrame, station.x + dx, top + 0.05, (front + back) / 2);
+
+  // Platform along the north side of the track (track at z = 6.4, platform spans z 4.8..6.0)
+  const platZ = 5.4;
+  const platDepth = 1.2;
+  const platWidth = 4.4;
+  // The slab runs a cell past the canopy at each end so a whole train fits.
+  box(platWidth + 2 * CELL, 0.12, platDepth, kit.pavement, station.x, 0.06, platZ);
+  box(2.0, 0.04, platZ - platDepth / 2 - back, kit.pavement, station.x, 0.02, (back + platZ - platDepth / 2) / 2);
+
+  // Platform canopy on two posts with a warm downlight
+  const downlight = std(0x222222, { emissive: 0xfff0d0, emissiveIntensity: 0 });
+  glowing.push([downlight, 1.5]);
+  for (const dx of [-1.5, 1.5]) {
+    box(0.04, 0.46, 0.04, darkFrame, station.x + dx, 0.35, platZ, true);
+    post(station.x + dx, platZ, 0.04);
+  }
+  box(platWidth - 0.4, 0.025, platDepth - 0.3, std(0x3a3d44, { roughness: 0.7 }), station.x, 0.58, platZ, true);
+  box(platWidth - 1.0, 0.006, 0.15, downlight, station.x, 0.565, platZ);
+
+  box(0.8, 0.18, 0.02, signMat, station.x, 0.42, platZ - 0.15);
+  for (const dx of [-0.3, 0.3]) box(0.02, 0.28, 0.02, darkFrame, station.x + dx, 0.26, platZ - 0.15);
+
+  box(0.5, 0.015, 0.12, std(0x8a5a3a, { roughness: 0.7 }), station.x + 1.0, 0.18, platZ - 0.25, true);
+  for (const dx of [-0.2, 0.2]) box(0.02, 0.06, 0.1, darkFrame, station.x + 1.0 + dx, 0.15, platZ - 0.25);
+}
+
+function buildStation(commercial) {
+  const mat = paletteMaterial(commercial, 1.2);
+  return building('commercial', STATION.model, STATION.x, STATION, mat).then(obj => {
+    const c = collect(() => decorateStation(obj, STATION));
+    editable('station', [obj, ...c.parts], {
+      ...c,
+      solids: [obj.userData.solid, ...c.solids],
+      places: [PLACES.get(STATION.name)],
+      points: [STATION_DOOR],
+    });
+  });
 }
 
 function buildBusStop() {
@@ -630,6 +690,15 @@ function onPath(x, z) {
 // Filled in by buildPark for the wishing fountain.
 const fountain = {};
 
+// A tree of either size, turned and scaled at random, that the editor can move.
+let trees = 0;
+function plantTree(x, z, plantMat) {
+  const id = `tree:${trees++}`;
+  const c = collect(() => post(x, z, 0.1));
+  return place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
+    { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }).then(obj => editable(id, [obj], c));
+}
+
 function buildPark(jobs, plantMat) {
   const { cz, ring, xHalf, zMin, zMax, path } = PARK;
   const lawn = std(0x74924f);
@@ -712,13 +781,7 @@ function buildPark(jobs, plantMat) {
   }
 
   // Trees: dense inside the park away from the paths, sparser outside it.
-  let trees = 0;
-  const tree = (x, z) => {
-    const id = `tree:${trees++}`;
-    const c = collect(() => post(x, z, 0.1));
-    jobs.push(place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
-      { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }).then(obj => editable(id, [obj], c)));
-  };
+  const tree = (x, z) => jobs.push(plantTree(x, z, plantMat));
   for (let placed = 0; placed < 26;) {
     const x = (rand() * 2 - 1) * (xHalf - 0.25);
     const z = zMin + 0.25 + rand() * (zMax - zMin - 0.5);
@@ -746,6 +809,7 @@ async function initRail() {
   rail = await buildRail({
     LEVEL, CELL, scene, tiles, roads, posts,
     model, place, post, dirOf,
+    onStationStop: burstCommuters,
   });
 }
 
@@ -762,7 +826,7 @@ async function buildTown() {
   const villaMat = () => paletteMaterial(suburban, 0.9 + rand() * 0.6, bedtime(21, 1), rand() * 0.1);
 
   // Ground, then each street's sidewalks, curbs and road.
-  box(120, 0.1, 120, std(0x667a52), 0, -0.05, 0);
+  box(400, 0.1, 400, std(0x667a52), 0, -0.05, 0);
   Object.assign(kit, { pavement: std(0xb3ada3), curb: std(0xd2ccc0) });
   paveSidewalks();
   // The streets' road surface is drawn with the painted roads.
@@ -776,6 +840,7 @@ async function buildTown() {
       editable('hotel', [obj, ...c.parts], { ...c, points: [HOTEL_DOOR] });
     }));
   }
+  if (STATION) jobs.push(buildStation(commercial));
   if (LEVEL.bus) buildBusStop();
 
   // Shops and public buildings, each with a sign and the shops with awnings.
@@ -802,6 +867,7 @@ async function buildTown() {
 
   // South of the main street: the park, with a gas station and a car park either side.
   if (PARK) buildPark(jobs, houseMat);
+  for (const [x, z] of LEVEL.trees) jobs.push(plantTree(x, z, houseMat));
   if (GAS) buildGasStation();
   if (LOT) buildParkingLot();
 
@@ -1430,6 +1496,7 @@ class Passenger extends Person {
     this.obj.position.copy(from);
     this.obj.visible = false;
     this.delay = delay;
+    this.to = to;
     const r = findRoute(from, to, Math.random());
     if (!r) {
       this.done = true;
@@ -1489,6 +1556,7 @@ function doorOf(x, front, facing, extra = {}) {
 const PLACES = new Map([
   ...[...SHOPS, ...CIVIC].map(s => [s.name, doorOf(s.x, s.front, s.facing)]),
   ...(HOTEL ? [[HOTEL.name, { door: HOTEL_DOOR }]] : []),
+  ...(STATION ? [[STATION.name, { door: STATION_DOOR }]] : []),
   ...(LEVEL.bus ? [['公車站', { door: new THREE.Vector3(STOP_X - 0.43, 0.05, -ROAD_HALF - 0.06) }]] : []),
   ...(GAS ? [['加油站', { door: new THREE.Vector3(GAS.x - 1.1, 0.05, GAS.z + 0.35) }]] : []),
   ...(PARK ? [['公園', { door: new THREE.Vector3(0, 0.03, PARK.cz - PARK.ring), park: true }]] : []),
@@ -1622,6 +1690,57 @@ class Resident extends Person {
       this.obj.visible = false;
     }
   }
+}
+
+// ---------- commuters ----------
+
+// Unnamed people between the station door and the buildings: a steady
+// trickle through the day, thinner at night, and a burst off every train that
+// stops. LEVEL.commuters caps how many are out at once.
+const COMMUTER_GAP = 10; // seconds between trickle arrivals at full activity
+let commuterT = 0;
+
+class Commuter extends Passenger {
+  // The walk grid changed: carry on from here to the same door.
+  reroute() {
+    const r = findRoute(this.obj.position, this.to, 0.5);
+    if (!r) {
+      this.done = true;
+      scene.remove(this.obj);
+      return;
+    }
+    this.pts = r.pts;
+    this.seg = 1;
+  }
+}
+
+// A random shop, civic building, hotel or home that is still standing.
+function commuterDoor() {
+  const doors = [...SHOPS, ...CIVIC, ...(HOTEL ? [HOTEL] : [])].map(b => PLACES.get(b.name))
+    .concat(homeDoors).filter(pl => !pl.removed);
+  return doors[Math.floor(Math.random() * doors.length)].door;
+}
+
+function spawnCommuter(fromStation, delay) {
+  if (walkers.filter(w => w instanceof Commuter && !w.done).length >= LEVEL.commuters) return;
+  const station = PLACES.get(STATION.name);
+  if (station.removed) return;
+  const gltf = peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
+  const door = commuterDoor();
+  walkers.push(fromStation ? new Commuter(gltf, station.door, door, delay) : new Commuter(gltf, door, station.door, delay));
+}
+
+// A train has stopped: a few step off, more when the town is busy.
+function burstCommuters() {
+  const n = Math.ceil(6 * activity(time) * (0.5 + Math.random() / 2));
+  for (let i = 0; i < n; i++) spawnCommuter(true, i * 0.7);
+}
+
+function updateCommuters(dt) {
+  if ((commuterT -= dt) > 0) return;
+  const a = activity(time);
+  commuterT = COMMUTER_GAP / a * (0.5 + Math.random());
+  spawnCommuter(Math.random() < 0.5, 0);
 }
 
 let peopleGltfs = [];
@@ -2930,7 +3049,7 @@ function togglePlay() {
     player.obj = null;
     camera.position.copy(overview.pos);
     controls.target.copy(overview.target);
-    Object.assign(controls, { minDistance: 3, maxDistance: 40, maxPolarAngle: 1.32 });
+    Object.assign(controls, { minDistance: 3, maxDistance: VIEW.maxDistance, maxPolarAngle: 1.32 });
     $('prompt').hidden = true;
   }
 }
@@ -3331,7 +3450,10 @@ function applyState(item, { x, z, rot, removed }) {
 // when a cat hides there, and only cats on a changed building are re-seated.
 function settleTown() {
   rebuildNav();
-  for (const w of walkers) if (w instanceof Resident) w.plan();
+  for (const w of walkers) {
+    if (w instanceof Resident) w.plan();
+    else if (w instanceof Commuter && !w.done) w.reroute();
+  }
 }
 
 // A building's footprint for the cats: its solids and posts in world space,
@@ -3836,14 +3958,16 @@ const zebraGroup = new THREE.Group();
 scene.add(zebraGroup);
 
 function drawZebras() {
-  zebraGroup.clear();
+  clearPaving(zebraGroup);
+  const stripes = [];
   for (const { x, z, w, ns } of zebras) {
     for (let i = 0; i < 7; i++) {
       const t = -ROAD_HALF + 0.12 + i * 0.226;
-      if (ns) box(0.11, 0.004, w, zebraMat, x + t, 0.022, z, false, zebraGroup);
-      else box(w, 0.004, 0.11, zebraMat, x, 0.022, z + t, false, zebraGroup);
+      if (ns) stripes.push([x + t, 0.022, z, 0.11, 0.004, w]);
+      else stripes.push([x, 0.022, z + t, w, 0.004, 0.11]);
     }
   }
+  paveBoxes(stripes, zebraMat, zebraGroup);
 }
 
 function setZebras(list) {
@@ -4182,6 +4306,7 @@ function frame() {
   applyTime(time);
   const a = Math.min(1, activity(time) + crowdBoost);
   if (rail) rail.update(dt, dt * speed, activity(time), player.active ? player.pos : null);
+  if (LEVEL.commuters) updateCommuters(dt);
   for (const w of walkers) w.update(dt, a);
   for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
   updateTraffic(dt, a);

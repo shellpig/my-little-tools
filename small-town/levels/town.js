@@ -93,4 +93,6 @@ export default {
   wishes: true,
   rail: null,
   camera: { target: [0, 0.2, -2.2], position: [4, 12, 13] },
+  view: { maxDistance: 40, fog: [20, 70], shadow: 16 },
+  trees: [],
 };

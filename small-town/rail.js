@@ -238,6 +238,9 @@ export async function buildRail(ctx) {
   const offsets = [0];
   for (let k = 1; k < units.length; k++) offsets.push(offsets[k - 1] - units[k - 1].rear + units[k].front + TRAIN_GAP);
   const trainLen = units[0].front + offsets[offsets.length - 1] - units[units.length - 1].rear;
+  // Where the lead unit's centre stops so the whole train sits centred on
+  // the station cell, alongside the platform.
+  const stopS = stationS === null ? null : stationS + trainLen / 2 - units[0].front;
 
   // Keep the whole visible consist on track during its approach and exit.
   const firstMove = { x: cells[1][0] - cells[0][0], z: cells[1][1] - cells[0][1] };
@@ -412,8 +415,8 @@ export async function buildRail(ctx) {
         let target = TRAIN_CRUISE;
         // Coarse frames may carry the nose a hair past the mark, so keep
         // braking just beyond it and snap back: the correction is invisible.
-        if (!t.dwelled && stationS !== null && t.s < stationS + 0.5) {
-          target = Math.min(target, t.s <= stationS ? Math.sqrt(Math.max(stationS - t.s, 0)) : 0);
+        if (!t.dwelled && stopS !== null && t.s < stopS + 0.5) {
+          target = Math.min(target, t.s <= stopS ? Math.sqrt(Math.max(stopS - t.s, 0)) : 0);
         }
         const player = playerPos;
         if (player) {
@@ -432,11 +435,12 @@ export async function buildRail(ctx) {
           if (!Number.isFinite(t.speed) || t.speed < 0) t.speed = 0;
           t.s += t.speed * dt;
         }
-        if (!t.dwelled && stationS !== null && Math.abs(t.s - stationS) < 0.06 && t.speed < 0.1) {
-          t.s = stationS;
+        if (!t.dwelled && stopS !== null && Math.abs(t.s - stopS) < 0.06 && t.speed < 0.1) {
+          t.s = stopS;
           t.speed = 0;
           t.dwelled = true;
           t.waitT = TRAIN_DWELL;
+          if (ctx.onStationStop) ctx.onStationStop();
         }
         for (let k = 0; k < units.length; k++) {
           const q = pointAt(line, t.s - offsets[k]);
@@ -492,7 +496,7 @@ export async function buildRail(ctx) {
   };
   // A plain platform slab east (or as sided) of the stopping cell: the
   // P1-D station building will replace this placeholder's looks.
-  if (stationS !== null && def.station) {
+  if (stationS !== null && def.station && !ctx.LEVEL.station) {
     const [si, sj] = def.station.cell;
     const p = pointAt(line, stationS);
     const side = def.station.side === 'west' ? { x: -1, z: 0 }
