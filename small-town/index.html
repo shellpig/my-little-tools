@@ -123,7 +123,7 @@
   .slot button:disabled { opacity: .4; cursor: default; }
   .add-panel { position: fixed; left: 28px; top: 292px; z-index: 6; width: 300px; max-height: calc(100vh - 374px); overflow: auto;
     box-sizing: border-box; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(16, 20, 30, .94); }
-  .add-panel[hidden], #add-walls[hidden], #add-shop[hidden], #add-paving[hidden], #add-model-box[hidden] { display: none; }
+  .add-panel[hidden], #add-walls[hidden], #add-roofs[hidden], #add-shop[hidden], #add-paving[hidden], #add-model-box[hidden] { display: none; }
   .add-models { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
   .add-models button { padding: 0; aspect-ratio: 1; overflow: hidden; border: 2px solid transparent; border-radius: 10px;
     background: rgba(255, 255, 255, .08); cursor: pointer; }
@@ -178,6 +178,8 @@
   .chips button { padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, .05);
     color: var(--text); font-family: inherit; font-size: 13px; cursor: pointer; }
   .chips button.on { background: #f3f5f9; color: #111; }
+  #add-walls-row, #add-roofs-row { display: grid; grid-template-columns: repeat(5, 1fr); }
+  #add-walls-row button, #add-roofs-row button { padding: 6px 0; }
   #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 15px; color: var(--dim);
     background: #0b1020; transition: opacity .6s; }
   #loading.done { opacity: 0; pointer-events: none; }
@@ -262,6 +264,7 @@
   <div class="slots-head"><b>新增物件</b><button id="add-close" class="toggle" title="關閉">✕</button></div>
   <div id="add-tabs" class="chips"></div>
   <div id="add-walls"><div class="opt-label">牆色</div><div id="add-walls-row" class="chips"></div></div>
+  <div id="add-roofs"><div class="opt-label">屋頂色</div><div id="add-roofs-row" class="chips"></div></div>
   <div id="add-shop">
     <div class="opt-label">招牌</div>
     <label class="name"><input id="add-name" maxlength="6" value="新商店" autocomplete="off"></label>

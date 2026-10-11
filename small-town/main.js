@@ -361,7 +361,9 @@ function swatchMask(x, y, w, h) {
 }
 
 // The commercial palette with its wall swatch in a pastel instead of white.
-const PASTELS = [['#c2dcf4', '#a2bedb'], ['#c6e8bd', '#a5cb9b'], ['#f6e4a2', '#dbc781']];
+const PASTELS = [['#c2dcf4', '#a2bedb'], ['#c6e8bd', '#a5cb9b'], ['#f6e4a2', '#dbc781'],
+  ['#f6ccd8', '#dba9b7'], ['#dccdf2', '#bcaad8'], ['#dcdcd8', '#bbbbb6'], ['#80848c', '#61656c'],
+  ['#f6d5b4', '#dbb592'], ['#c0e6e2', '#9ccac5']];
 function pastel(textures, [top, bottom]) {
   const c = document.createElement('canvas');
   c.width = textures.map.image.width;
@@ -375,6 +377,37 @@ function pastel(textures, [top, bottom]) {
   ctx.fillStyle = g;
   ctx.fillRect(x, y, w, h);
   return { ...textures, map: paletteTexture(c) };
+}
+
+// Villa walls and roofs as [label, top, bottom]; the first of each is the
+// pack's own. Walls sample the swatch at x 192, roofs the one at x 0.
+const VILLA_WALLS = [['蜜桃', '#f1be98', '#c9825b'], ['奶油', '#f4d892', '#cfa955'], ['薄荷', '#b2dec4', '#78b293'],
+  ['天藍', '#b0cdee', '#7699c6'], ['磚紅', '#e3a08c', '#b56652']];
+const VILLA_ROOFS = [['藍', '#6793d8', '#5755bc'], ['紅', '#d66a56', '#a83f38'], ['綠', '#5ea877', '#367352'],
+  ['灰', '#727884', '#474b56'], ['咖啡', '#a8714f', '#714632']];
+const villaPalettes = new Map();
+function villaPalette(wall = 0, roof = 0) {
+  if (!wall && !roof) return kit.suburban;
+  const key = `${wall},${roof}`;
+  if (!villaPalettes.has(key)) {
+    const c = document.createElement('canvas');
+    c.width = kit.suburban.map.image.width;
+    c.height = kit.suburban.map.image.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(kit.suburban.map.image, 0, 0);
+    // Each swatch: a flat left half in the top colour, a shaded right half.
+    for (const [x, y, [, top, bottom]] of [[192, 256, VILLA_WALLS[wall]], [0, 128, VILLA_ROOFS[roof]]]) {
+      const g = ctx.createLinearGradient(0, y, 0, y + 128);
+      g.addColorStop(0, top);
+      g.addColorStop(1, bottom);
+      ctx.fillStyle = top;
+      ctx.fillRect(x, y, 32, 128);
+      ctx.fillStyle = g;
+      ctx.fillRect(x + 32, y, 32, 128);
+    }
+    villaPalettes.set(key, { ...kit.suburban, map: paletteTexture(c) });
+  }
+  return villaPalettes.get(key);
 }
 
 // Palettes and shared materials from building the town, kept for adding to it.
@@ -3708,7 +3741,8 @@ const ADD_TYPES = [
 ];
 const BRUSHES = [['road', '馬路'], ['walk', '人行道'], ['zebra', '斑馬線'], ['erase', '清除']];
 // Wall colours: white, or one of the pastels.
-const WALLS = [['白色', -1], ['淡藍', 0], ['淡綠', 1], ['淡黃', 2]];
+const WALLS = [['白色', -1], ['淡藍', 0], ['淡綠', 1], ['淡黃', 2], ['粉紅', 3], ['粉紫', 4], ['淺灰', 5], ['深灰', 6],
+  ['杏色', 7], ['湖綠', 8]];
 const SHOP_THEMES = [
   { bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a },
   { bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f },
@@ -3720,7 +3754,7 @@ const SHOP_THEMES = [
 let placing = null;
 let placingTicket = null;
 let pointerFloor = null;
-const addChoice = { type: 'house', wall: -1, theme: 0 };
+const addChoice = { type: 'house', wall: -1, villaWall: 0, roof: 0, theme: 0 };
 
 // Built at the origin facing +z; its pivot then carries it into place.
 async function buildAdded(id, add) {
@@ -3735,7 +3769,7 @@ async function buildAdded(id, add) {
     const villa = add.type === 'villa';
     const walls = add.wall >= 0 ? kit.pastels[add.wall] : kit.commercial;
     const mat = villa
-      ? paletteMaterial(kit.suburban, 0.9 + Math.random() * 0.6, 21 + Math.random(), Math.random() * 0.1)
+      ? paletteMaterial(villaPalette(add.wall, add.roof), 0.9 + Math.random() * 0.6, 21 + Math.random(), Math.random() * 0.1)
       : paletteMaterial(walls, add.type === 'shop' ? 1.3 : [1.4, 0.7, 2.2][Math.floor(Math.random() * 3)],
         add.type === 'shop' ? 22 : (21.5 + Math.random() * 5) % 24, add.type === 'shop' ? 0 : Math.random() * 0.15);
     const obj = solidOf(await place(villa ? 'suburban' : 'commercial', add.model, { mat }));
@@ -3748,7 +3782,7 @@ async function buildAdded(id, add) {
   return item;
 }
 
-async function startPlacing(add) {
+async function startPlacing(add, rot = 0) {
   setBrush(null);
   cancelPlacing();
   const ticket = placingTicket = {};
@@ -3757,7 +3791,7 @@ async function startPlacing(add) {
   if (ticket !== placingTicket || !editing) return discard(item);
   placing = item;
   const at = pointerFloor ?? controls.target;
-  applyState(item, { x: Math.round(at.x / SNAP) * SNAP, z: Math.round(at.z / SNAP) * SNAP, rot: 0, removed: false });
+  applyState(item, { x: Math.round(at.x / SNAP) * SNAP, z: Math.round(at.z / SNAP) * SNAP, rot, removed: false });
   select(item);
   $('prompt').textContent = '點地面放下 · R 旋轉 · Esc 或右鍵取消';
   $('prompt').hidden = false;
@@ -3798,19 +3832,35 @@ function chip(label, on, onclick) {
   return b;
 }
 
+// What to build for a model, with the colours picked in the panel.
+function addFor(t, model) {
+  const add = { type: t.type, model };
+  if (t.pack === 'commercial' && addChoice.wall >= 0) add.wall = addChoice.wall;
+  if (t.type === 'villa') Object.assign(add, { wall: addChoice.villaWall, roof: addChoice.roof });
+  if (t.type === 'shop') Object.assign(add, { name: $('add-name').value.trim() || '新商店', theme: addChoice.theme });
+  return add;
+}
+
 function renderAddPanel() {
   const t = ADD_TYPES.find(a => a.type === addChoice.type);
   const restyle = change => () => {
     Object.assign(addChoice, change);
     if (change.type && change.type !== 'paving') setBrush(null);
     renderAddPanel();
+    // A new colour repaints the building still in hand, keeping its turn.
+    if (!change.type && placing?.add.type === t.type) startPlacing(addFor(t, placing.add.model), placing.pivot.rotation.y);
   };
   $('add-paving').hidden = t.type !== 'paving';
   $('add-model-box').hidden = t.type === 'paving';
   $('add-brushes').replaceChildren(...BRUSHES.map(([b, label]) => chip(label, brush === b, () => setBrush(brush === b ? null : b))));
   $('add-tabs').replaceChildren(...ADD_TYPES.map(a => chip(a.label, a === t, restyle({ type: a.type }))));
-  $('add-walls').hidden = t.pack !== 'commercial';
-  $('add-walls-row').replaceChildren(...WALLS.map(([label, w]) => chip(label, addChoice.wall === w, restyle({ wall: w }))));
+  const villa = t.type === 'villa';
+  $('add-walls').hidden = t.pack !== 'commercial' && !villa;
+  $('add-walls-row').replaceChildren(...(villa
+    ? VILLA_WALLS.map(([label], i) => chip(label, addChoice.villaWall === i, restyle({ villaWall: i })))
+    : WALLS.map(([label, w]) => chip(label, addChoice.wall === w, restyle({ wall: w })))));
+  $('add-roofs').hidden = !villa;
+  $('add-roofs-row').replaceChildren(...VILLA_ROOFS.map(([label], i) => chip(label, addChoice.roof === i, restyle({ roof: i }))));
   $('add-shop').hidden = t.type !== 'shop';
   $('add-themes').replaceChildren(...SHOP_THEMES.map((theme, i) => {
     const b = document.createElement('button');
@@ -3823,12 +3873,7 @@ function renderAddPanel() {
     const b = document.createElement('button');
     b.title = model;
     b.innerHTML = `<img src="${ASSETS}/${t.pack}/Previews/${model}.png" alt="">`;
-    b.onclick = () => {
-      const add = { type: t.type, model };
-      if (t.pack === 'commercial' && addChoice.wall >= 0) add.wall = addChoice.wall;
-      if (t.type === 'shop') Object.assign(add, { name: $('add-name').value.trim() || '新商店', theme: addChoice.theme });
-      startPlacing(add);
-    };
+    b.onclick = () => startPlacing(addFor(t, model));
     return b;
   }));
 }
