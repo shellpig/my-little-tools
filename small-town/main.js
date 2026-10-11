@@ -153,6 +153,18 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.prepend(renderer.domElement);
 
+// Rails, trains and cars are cut off at the map's edge, so nothing that
+// runs on past it shows over the dark ground beyond.
+renderer.localClippingEnabled = true;
+const MAP_CLIP = (([i0, i1, j0, j1]) => [
+  new THREE.Plane(new THREE.Vector3(1, 0, 0), -(i0 - 0.5) * CELL),
+  new THREE.Plane(new THREE.Vector3(-1, 0, 0), (i1 + 0.5) * CELL),
+  new THREE.Plane(new THREE.Vector3(0, 0, 1), -(j0 - 0.5) * CELL),
+  new THREE.Plane(new THREE.Vector3(0, 0, -1), (j1 + 0.5) * CELL),
+])(LEVEL.bounds);
+const clipMat = m => Object.assign(m, { clippingPlanes: MAP_CLIP, clipShadows: true });
+const clipToMap = root => root.traverse(o => { if (o.isMesh) [o.material].flat().forEach(clipMat); });
+
 const scene = new THREE.Scene();
 // How far the overview camera may pull back, the fog band and the sun's
 // shadow reach all come from the level.
@@ -392,7 +404,14 @@ const cache = new Map();
 
 function model(pack, name) {
   const url = `${ASSETS}/${pack}/Models/GLB format/${name}.glb`;
-  if (!cache.has(url)) cache.set(url, loader.loadAsync(url));
+  // Car and train models share their materials with every copy, so they
+  // are clipped once here.
+  if (!cache.has(url)) {
+    cache.set(url, loader.loadAsync(url).then(gltf => {
+      if (pack === 'car-kit' || pack === 'train-kit') clipToMap(gltf.scene);
+      return gltf;
+    }));
+  }
   return cache.get(url);
 }
 
@@ -2296,6 +2315,7 @@ function makeBus(wheel, headMat, tailMat) {
   part(0.006, 0.24, 0.14, glass, -W / 2 - 0.004, 0.18, L / 2 - 0.22);
   lightPair(g, headMat, 0.11, 0.1, L / 2 + 0.004);
   lightPair(g, tailMat, 0.11, 0.1, -L / 2 - 0.004);
+  clipToMap(g);
   for (const z of [L / 2 - 0.25, -L / 2 + 0.25]) {
     for (const x of [-(W / 2 - 0.03), W / 2 - 0.03]) {
       const w = wheel.scene.clone(true);
@@ -2312,6 +2332,8 @@ async function addTraffic() {
   const headMat = std(0x222222, { emissive: 0xfff4d6, emissiveIntensity: 0 });
   const tailMat = std(0x441111, { emissive: 0xff3a2a, emissiveIntensity: 0 });
   glowing.push([headMat, 4], [tailMat, 2.5]);
+  clipMat(headMat);
+  clipMat(tailMat);
   const [wheel, ...cars] = await Promise.all(['wheel-default', ...CARS].map(n => model('car-kit', n)));
   cars.forEach((gltf, i) => {
     const { group, length } = makeCar(gltf, headMat, tailMat);

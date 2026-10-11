@@ -170,6 +170,8 @@ export default {
     station: { cell: [0, 4], side: 'north' },
     every: [90, 240],
     train: ['train-electric-square-a', 'train-electric-square-b', 'train-electric-square-b', 'train-electric-square-c'],
+    // 每第 4 班是雙層快車：1.5 倍速，不停站。
+    express: { train: ['train-electric-double-a', 'train-electric-double-b', 'train-electric-double-b', 'train-electric-double-c'], speed: 1.5, every: 4 },
   },
   camera: { target: [0, 0.2, 3], position: [4, 12, 18.2] },
   // 模擬城市式玩法：鏡頭可以拉遠看整張地圖，霧淡、陰影範圍蓋住整張地圖。

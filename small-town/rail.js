@@ -181,6 +181,9 @@ export async function buildRail(ctx) {
   const names = Array.isArray(def.train) && def.train.length ? def.train
     : ['train-locomotive-passenger-a', 'train-carriage-wood', 'train-carriage-box'];
   const every = Array.isArray(def.every) && def.every[1] > def.every[0] ? def.every : [90, 240];
+  // Optional express: every nth departure runs this set instead, faster,
+  // straight through the station.
+  const express = def.express && Array.isArray(def.express.train) && def.express.train.length ? def.express : null;
 
   // Track visuals: one straight or corner piece per cell, placed so the
   // model's own arc meets the centre line's arc. The EXT approaches past
@@ -218,29 +221,35 @@ export async function buildRail(ctx) {
         pin.z - RAIL_SCALE * (-local.p.x * s + local.p.z * c));
     }
   }
-  // The single train: one head plus cars, built once and reused every run
+  // Each train set: one head plus cars, built once and reused every run
   // so nothing is created per frame. Unit extents come from the loaded
   // models (front/rear allow an off-centre origin), keeping the set gap
   // between bodies through bends.
-  const units = [];
-  for (const n of names) {
-    const gltf = await ctx.model('train-kit', n);
-    const obj = gltf.scene.clone(true);
-    obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
-    const b = new THREE.Box3().setFromObject(obj);
-    obj.scale.setScalar(TRAIN_SCALE);
-    obj.visible = false;
-    ctx.scene.add(obj);
-    const front = b.max.z * TRAIN_SCALE;
-    const rear = b.min.z * TRAIN_SCALE;
-    units.push({ obj, len: front - rear, front, rear });
+  async function buildSet(setNames, cruise, stops) {
+    const units = [];
+    for (const n of setNames) {
+      const gltf = await ctx.model('train-kit', n);
+      const obj = gltf.scene.clone(true);
+      obj.traverse(o => { if (o.isMesh) o.castShadow = true; });
+      const b = new THREE.Box3().setFromObject(obj);
+      obj.scale.setScalar(TRAIN_SCALE);
+      obj.visible = false;
+      ctx.scene.add(obj);
+      const front = b.max.z * TRAIN_SCALE;
+      const rear = b.min.z * TRAIN_SCALE;
+      units.push({ obj, len: front - rear, front, rear });
+    }
+    const offsets = [0];
+    for (let k = 1; k < units.length; k++) offsets.push(offsets[k - 1] - units[k - 1].rear + units[k].front + TRAIN_GAP);
+    const trainLen = units[0].front + offsets[offsets.length - 1] - units[units.length - 1].rear;
+    // Where the lead unit's centre stops so the whole train sits centred on
+    // the station cell, alongside the platform.
+    const stopS = stationS === null || !stops ? null : stationS + trainLen / 2 - units[0].front;
+    return { units, offsets, trainLen, stopS, cruise };
   }
-  const offsets = [0];
-  for (let k = 1; k < units.length; k++) offsets.push(offsets[k - 1] - units[k - 1].rear + units[k].front + TRAIN_GAP);
-  const trainLen = units[0].front + offsets[offsets.length - 1] - units[units.length - 1].rear;
-  // Where the lead unit's centre stops so the whole train sits centred on
-  // the station cell, alongside the platform.
-  const stopS = stationS === null ? null : stationS + trainLen / 2 - units[0].front;
+  const local = await buildSet(names, TRAIN_CRUISE, true);
+  const fast = express ? await buildSet(express.train, TRAIN_CRUISE * (express.speed || 1), false) : null;
+  const trainLen = Math.max(local.trainLen, fast ? fast.trainLen : 0);
 
   // Keep the whole visible consist on track during its approach and exit.
   const firstMove = { x: cells[1][0] - cells[0][0], z: cells[1][1] - cells[0][1] };
@@ -276,7 +285,7 @@ export async function buildRail(ctx) {
   };
   const crossings = [];
   const rail = {
-    line, units, crossings, train: null, departures: 0, lastGap: null,
+    line, units: local.units, crossings, train: null, departures: 0, lastGap: null,
     nextIn: FIRST_TRAIN[0] + Math.random() * (FIRST_TRAIN[1] - FIRST_TRAIN[0]),
     // A rail cell with a road tile on it is a crossing; painted or erased
     // roads (and undo) rebuild it through buildRoads. Barrier units sit on
@@ -404,15 +413,17 @@ export async function buildRail(ctx) {
       if (!this.train) {
         this.nextIn -= gameDt;
         if (this.nextIn <= 0) {
-          this.train = { s: 0, speed: 0, dwelled: stationS === null, waitT: 0 };
           this.departures++;
-          for (const u of units) u.obj.visible = true;
+          const set = fast && this.departures % (express.every || 4) === 0 ? fast : local;
+          this.train = { set, s: 0, speed: 0, dwelled: set.stopS === null, waitT: 0 };
+          for (const u of set.units) u.obj.visible = true;
         }
       }
       const t = this.train;
       if (t) {
+        const { units, offsets, trainLen, stopS } = t.set;
         const nose = t.s + units[0].front;
-        let target = TRAIN_CRUISE;
+        let target = t.set.cruise;
         // Coarse frames may carry the nose a hair past the mark, so keep
         // braking just beyond it and snap back: the correction is invisible.
         if (!t.dwelled && stopS !== null && t.s < stopS + 0.5) {
@@ -462,9 +473,11 @@ export async function buildRail(ctx) {
       for (const c of crossings) {
         let shut = false;
         if (t) {
+          const { units, trainLen, cruise } = t.set;
           const nose = t.s + units[0].front;
           const tail = t.s - (trainLen - units[0].front);
-          shut = nose > c.s - GATE_WARN && tail < c.s + ctx.CELL / 2 + 0.05;
+          // A faster set warns from farther out, for the same lead time.
+          shut = nose > c.s - GATE_WARN * cruise / TRAIN_CRUISE && tail < c.s + ctx.CELL / 2 + 0.05;
         }
         c.closed = shut;
         c.armT = THREE.MathUtils.clamp(c.armT + (shut ? dt : -dt) / GATE_TIME, 0, 1);
@@ -475,6 +488,7 @@ export async function buildRail(ctx) {
     // Plain data for evidence: nothing here moves the town.
     snapshot() {
       const t = this.train;
+      const { units, offsets, trainLen } = t ? t.set : local;
       return {
         active: !!t,
         s: t ? t.s : null,
@@ -485,6 +499,7 @@ export async function buildRail(ctx) {
         tail: t ? t.s - (trainLen - units[0].front) : null,
         lineLength: line.length,
         stationS,
+        express: t ? t.set === fast : null,
         trainLen,
         unitS: t ? units.map((u, k) => t.s - offsets[k]) : [],
         departures: this.departures,
