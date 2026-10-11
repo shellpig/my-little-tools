@@ -396,7 +396,7 @@ export function createWishes(town) {
       ...once('bubbles'),
       start() {
         const mats = [0xff8fab, 0xffd6a5, 0xcaffbf, 0x9bf6ff, 0xa0c4ff, 0xbdb2ff].map(c => new THREE.MeshPhysicalMaterial({
-          color: c, transparent: true, opacity: 0.38, roughness: 0, metalness: 0, clearcoat: 1,
+          color: c, transparent: true, opacity: 0.65, roughness: 0, metalness: 0, clearcoat: 1,
           iridescence: 1, iridescenceIOR: 1.3, depthWrite: false,
         }));
         const geo = new THREE.SphereGeometry(1, 16, 12);
