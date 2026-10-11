@@ -789,9 +789,11 @@ function buildPark(jobs, plantMat) {
     tree(x, z);
     placed++;
   }
+  // Outside the park, but short of the map's south edge.
+  const edgeZ = (LEVEL.bounds[3] + 0.5) * CELL;
   for (let placed = 0; placed < 22;) {
     const x = -11 + rand() * 22;
-    const z = zMax + 0.4 + rand() * 3;
+    const z = zMax + 0.4 + rand() * (edgeZ - 0.3 - zMax - 0.4);
     if (LEVEL.paths.some(([x0, z0, x1, z1]) => x > x0 - 0.2 && x < x1 + 0.2 && z > z0 - 0.2 && z < z1 + 0.2)) continue;
     tree(x, z);
     placed++;
@@ -826,7 +828,11 @@ async function buildTown() {
   const villaMat = () => paletteMaterial(suburban, 0.9 + rand() * 0.6, bedtime(21, 1), rand() * 0.1);
 
   // Ground, then each street's sidewalks, curbs and road.
-  box(400, 0.1, 400, std(0x667a52), 0, -0.05, 0);
+  // Grass over the map's bounds; dark ground beyond, where nothing can be built.
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  box(400, 0.1, 400, std(0x3a3c40), 0, -0.05, 0);
+  box((iMax - iMin + 1) * CELL, 0.1, (jMax - jMin + 1) * CELL, std(0x667a52),
+    (iMin + iMax) / 2 * CELL, -0.049, (jMin + jMax) / 2 * CELL);
   Object.assign(kit, { pavement: std(0xb3ada3), curb: std(0xd2ccc0) });
   paveSidewalks();
   // The streets' road surface is drawn with the painted roads.
@@ -2680,6 +2686,10 @@ const hasWishes = () => LEVEL.wishes !== false && !!PARK;
 function drawCatBook(fresh) {
   const showCats = LEVEL.cats.length > 0;
   const showWishes = hasWishes();
+  // The header only mentions what this level has.
+  document.querySelector('.title p').textContent = ['點路上的人聽他說話',
+    ...(showCats ? ['找出躲起來的貓'] : []), ...(showWishes ? ['點噴水池許願'] : [])].join('，')
+    + '。左鍵拖曳平移，右鍵拖曳旋轉，滾輪縮放。';
   $('cat-count').parentElement.style.display = showCats ? '' : 'none';
   $('cat-row').style.display = showCats ? '' : 'none';
   $('wish-count').parentElement.style.display = showWishes ? '' : 'none';
