@@ -7,9 +7,11 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RESIDENTS, PASSERBY_LINES } from './residents.js';
+import { PASSERBY_LINES } from './residents.js';
 import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
 import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
+import { levelById } from './levels/index.js';
+import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -21,36 +23,115 @@ const PALETTE = {
 const PEOPLE = ['male-a', 'male-b', 'male-c', 'male-d', 'male-e', 'male-f',
   'female-a', 'female-b', 'female-c', 'female-d', 'female-e', 'female-f'].map(n => `character-${n}`);
 const PERSON_SCALE = 0.32;
-const WALKERS = 20;
-const STROLLERS = 7;
-const STREET_HALF = 9;
 
 // Street cross-section along z: two lanes, each as wide as a sidewalk.
 const LANE = 0.8;
 const ROAD_HALF = LANE;
 const SIDEWALK = 0.8;
 const FRONTAGE = ROAD_HALF + SIDEWALK; // where building fronts and the park start
+const CELL = ROAD_HALF * 2;
+const cellKey = (i, j) => `${i},${j}`;
 
-// The town is a grid: two east–west streets joined by two north–south lanes.
-const STREETS = [0, -7.2]; // centre line z of the main street and the back street
-const ALLEYS = [-5.6, 5.6]; // centre line x of the lanes
-const ALLEY_HALF = 0.45;
+// ---------- level and saved game ----------
 
-// Building rows: `front` is the z of the building fronts and `facing` the way
-// they face (+1 south, −1 north), so the main street's north side faces +1.
-const MAIN_NORTH = { street: STREETS[0], front: STREETS[0] - FRONTAGE, facing: 1 };
-const MAIN_SOUTH = { street: STREETS[0], front: STREETS[0] + FRONTAGE, facing: -1 };
-const BACK_SOUTH = { street: STREETS[1], front: STREETS[1] + FRONTAGE, facing: -1 };
-const BACK_NORTH = { street: STREETS[1], front: STREETS[1] - FRONTAGE, facing: 1 };
+const GAME_KEY = 'small-town:game';
+const LAYOUT_KEY = 'small-town:layout';
 
-// Homes: town houses on the main street and between the streets, detached
-// houses (villas) at the ends of the back street.
-const OUTER = [-6.6, -7.6, -8.6, -9.6, 6.6, 7.6, 8.6, 9.6];
-const HOMES = [
-  ...[-3.7, -4.65, 2.68, 3.67, 4.62, ...OUTER].map(x => ({ ...MAIN_NORTH, x })),
-  ...[-4.55, -3.6, -2.6, -1.5, 0, 1.5, 2.5, 3.5, 4.55, ...OUTER].map(x => ({ ...BACK_SOUTH, x })),
-  ...[-9.4, -10.9, 9.7, 11.2].map(x => ({ ...BACK_NORTH, x, villa: true })),
-];
+// The level's straight road runs expanded to tiles, plus its paved walks.
+function defaultTilesObj(lv) {
+  const L = lv ?? levelById('town');
+  const out = {};
+  for (const [i0, j0, i1, j1] of L.roads) {
+    const [di, dj] = [Math.sign(i1 - i0), Math.sign(j1 - j0)];
+    for (let i = i0, j = j0; ; i += di, j += dj) {
+      out[cellKey(i, j)] = 'road';
+      if (i === i1 && j === j1) break;
+    }
+  }
+  for (const [i0, j0, i1, j1] of L.walks) {
+    const [di, dj] = [Math.sign(i1 - i0), Math.sign(j1 - j0)];
+    for (let i = i0, j = j0; ; i += di, j += dj) {
+      out[cellKey(i, j)] = 'walk';
+      if (i === i1 && j === j1) break;
+    }
+  }
+  return out;
+}
+
+// An old unversioned layout becomes '#v': 2: back-street states (z < -3.6)
+// move north by 0.8, north/outside tiles and street extensions are dropped
+// and merged into the default roads, north EW zebras move while NS ones go.
+// Already-versioned layouts pass through untouched. Pure: no storage writes.
+function migrateLayout(layout) {
+  if (!layout || typeof layout !== 'object') return { '#v': 2 };
+  if (layout['#v']) return layout;
+  const lv = levelById('town');
+  const [iMin, iMax, jMin, jMax] = lv.bounds;
+  const out = {};
+  for (const [id, s] of Object.entries(layout)) {
+    if (id === '#tiles' || id === '#zebras') continue;
+    out[id] = (s && typeof s === 'object' && typeof s.z === 'number' && s.z < -3.6) ? { ...s, z: s.z - 0.8 } : s;
+  }
+  const defaults = defaultTilesObj(levelById('town'));
+  const retained = {};
+  const raw = layout['#tiles'];
+  if (raw && typeof raw === 'object') {
+    for (const [key, kind] of Object.entries(raw)) {
+      if (key[0] === 's') continue;
+      const [i, j] = key.split(',').map(Number);
+      if (!Number.isFinite(i) || !Number.isFinite(j)) continue;
+      if (i < iMin || i > iMax || j < jMin || j > jMax) continue;
+      if (j * CELL < -3.6) continue;
+      retained[key] = kind;
+    }
+  }
+  const merged = { ...defaults, ...retained };
+  if (JSON.stringify(sortedTiles(merged)) !== JSON.stringify(sortedTiles(defaults))) out['#tiles'] = merged;
+  if (Array.isArray(layout['#zebras'])) {
+    const zs = [];
+    for (const zb of layout['#zebras']) {
+      if (!zb || typeof zb !== 'object' || zb.ns) continue;
+      zs.push(typeof zb.z === 'number' && zb.z < -3.6 ? { ...zb, z: zb.z - 0.8 } : { ...zb });
+    }
+    if (JSON.stringify(zs) !== JSON.stringify(lv.zebras)) out['#zebras'] = zs;
+  }
+  out['#v'] = 2;
+  return out;
+}
+
+// The current game is { level, layout } in one key, written at once. Without
+// one, the old autosave counts as the town level: migrate it and persist the
+// game, leaving the old key alone.
+function readGame() {
+  try {
+    const g = JSON.parse(localStorage.getItem(GAME_KEY) || 'null');
+    if (g && typeof g.layout === 'object' && g.layout) return { level: levelById(g.level).id, layout: g.layout };
+  } catch { /* fall through to the old key */ }
+  let old = null;
+  try { old = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); } catch { /* storage unavailable */ }
+  const layout = migrateLayout(old && typeof old === 'object' ? old : {});
+  try { localStorage.setItem(GAME_KEY, JSON.stringify({ level: 'town', layout })); } catch { /* storage unavailable */ }
+  return { level: 'town', layout };
+}
+
+const sortedTiles = obj => Object.keys(obj).sort().map(k => [k, obj[k]]);
+
+const game = readGame();
+const LEVEL = levelById(game.level);
+
+// Town content comes from the level: buildings, park, gas, lamps, people,
+// cat spots, wishes and the camera.
+const HOMES = LEVEL.homes;
+const SHOPS = LEVEL.shops;
+const CIVIC = LEVEL.civic;
+const HOTEL = LEVEL.hotel;
+const PARK = LEVEL.park;
+const GAS = LEVEL.gas;
+const LOT = LEVEL.parking && LEVEL.gas ? { x: 8, z: LEVEL.gas.z } : null;
+const PARKING_STALLS = LOT ? [-1, 1].flatMap(row =>
+  [-1.2, -0.6, 0, 0.6, 1.2].map(dx => ({ x: LOT.x + dx, z: LOT.z + row * 0.65, rot: row > 0 ? Math.PI : 0 }))) : [];
+const WALKERS = LEVEL.walkers;
+const STROLLERS = LEVEL.strollers;
 
 let seed = 11;
 const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -69,15 +150,15 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x0b1020, 20, 55);
 
 const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(4, 12, 13);
+camera.position.set(...LEVEL.camera.position);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
-controls.target.set(0, 0.2, -2.2);
+controls.target.set(...LEVEL.camera.target);
 controls.enableDamping = true;
 controls.maxPolarAngle = 1.32;
 controls.minDistance = 3;
-controls.maxDistance = 35;
+controls.maxDistance = 40;
 
 const sun = new THREE.DirectionalLight(0xffffff, 2);
 sun.castShadow = true;
@@ -322,7 +403,7 @@ async function place(pack, name, { x = 0, y = 0, z = 0, rot = 0, scale = 1, mat 
 }
 
 // Slide a building along z so its front sits on its row's frontage.
-function alignFront(obj, front = MAIN_NORTH.front, facing = 1) {
+function alignFront(obj, front = -FRONTAGE, facing = 1) {
   const b = new THREE.Box3().setFromObject(obj);
   obj.position.z += facing > 0 ? front - 0.02 - b.max.z : front + 0.02 - b.min.z;
   return obj;
@@ -337,28 +418,8 @@ function building(pack, name, x, row, mat) {
 // ---------- shops ----------
 
 // `closes` is the clock hour the sign and lights go out; shops without one
-// are open all night.
-const SHOPS = [
-  { ...MAIN_NORTH, model: 'building-c', x: -1.72, name: '晨光咖啡', bg: '#3b2a20', fg: '#ffdca8', awning: 0xb8433a, glow: 1.4, closes: 22.5 },
-  { ...MAIN_NORTH, model: 'building-a', x: -2.72, name: '小巷書店', bg: '#1f3b3a', fg: '#f3ead2', awning: 0x2f6b4f, glow: 1.2, closes: 21.5 },
-  { ...MAIN_NORTH, model: 'building-h', x: 1.72, name: '便利商店', bg: '#f7f7f4', fg: '#1d6fd6', awning: 0x2c6fc4, glow: 1.8 },
-  { ...BACK_NORTH, model: 'building-d', x: -4.55, name: '麥香麵包', bg: '#5a3a1e', fg: '#ffe7b0', awning: 0xd9822b, glow: 1.3, closes: 20 },
-  { ...BACK_NORTH, model: 'building-b', x: -3.6, name: '小花園花店', bg: '#f4e8ef', fg: '#c0466e', awning: 0xe58fb0, glow: 1.0, closes: 19.5 },
-  { ...BACK_NORTH, model: 'building-c', x: -2.6, name: '阿嬤早餐', bg: '#fff3c4', fg: '#8a4b00', awning: 0xf2c14e, glow: 1.2, closes: 13 },
-  { ...BACK_NORTH, model: 'building-a', x: -1.5, name: '老街麵館', bg: '#7a1f1f', fg: '#fff1d6', awning: 0xb83a2e, glow: 1.5, closes: 21 },
-  { ...BACK_NORTH, model: 'building-h', x: 1.5, name: '安心藥局', bg: '#ffffff', fg: '#1f8a4c', awning: 0x2f9e5b, glow: 1.3, closes: 22 },
-  { ...BACK_NORTH, model: 'building-f', x: 2.5, name: '泡泡洗衣', bg: '#dff3ff', fg: '#1f6fb2', awning: 0x5aa9e6, glow: 1.0 },
-  { ...BACK_NORTH, model: 'building-g', x: 3.5, name: '拾光文具', bg: '#3d2f5c', fg: '#f3e6ff', awning: 0x7a5cc4, glow: 1.1, closes: 21 },
-  { ...BACK_NORTH, model: 'building-d', x: 4.55, name: '甜甜手搖飲', bg: '#1f4d4a', fg: '#c9f2e6', awning: 0x2fb3a0, glow: 1.4, closes: 23 },
-];
-
-// Public buildings beyond the lanes on the back street's north side: signs
-// but no awnings.
-const CIVIC = [
-  { ...BACK_NORTH, model: 'building-j', x: -7.2, name: '鎮立小學', bg: '#f2efe6', fg: '#2f5d8a', glow: 0.5, closes: 18 },
-  { ...BACK_NORTH, model: 'building-i', x: 6.75, name: '郵局', bg: '#1f7a3d', fg: '#ffffff', glow: 0.8, closes: 18.5 },
-  { ...BACK_NORTH, model: 'building-l', x: 8.2, name: '仁心診所', bg: '#ffffff', fg: '#c62f2f', glow: 1.0, closes: 21 },
-];
+// are open all night. SHOPS, CIVIC and the other town content come from LEVEL
+// (see the top of this file).
 
 function signTexture(text, bg, fg) {
   const c = document.createElement('canvas');
@@ -425,17 +486,14 @@ function addAwning(parent, width, color) {
 
 // ---------- hotel and bus stop ----------
 
-const HOTEL = { model: 'building-n', name: '山嵐旅館', bg: '#1d2440', fg: '#f5d58a' };
-// Where people disappear inside: under the hotel canopy, or into the store.
+// Where people disappear inside: under the hotel canopy. HOTEL is null on
+// levels without one; the door formula matches the town's hotel front.
 const HOTEL_DOOR = new THREE.Vector3(0, 0.05, -FRONTAGE + 0.06);
-const STORE_DOOR = new THREE.Vector3(1.72, 0.05, -FRONTAGE + 0.06);
 
-// The bus pulls up in the westbound (north) lane with its centre at STOP_X,
-// outside the convenience store; the shelter stands at the curb with its
-// back to the store.
-const STOP_X = 1.75;
-const SHELTER_X = 1.85;
-const SHELTER_Z = -(ROAD_HALF + 0.2);
+// The bus stop and its shelter come from the level; both stay empty without a bus.
+const STOP_X = LEVEL.bus ? LEVEL.busStop.x : 0;
+const SHELTER_X = LEVEL.bus ? LEVEL.busStop.shelterX : 0;
+const SHELTER_Z = LEVEL.bus ? LEVEL.busStop.shelterZ : 0;
 // The sit pose rests the thighs about SIT_DROP below a person's origin, so a
 // sitter's origin goes that far above the seat.
 const SIT_DROP = 0.014;
@@ -496,16 +554,15 @@ function buildBusStop() {
 // ---------- park ----------
 
 // A fenced lawn south of the street: an entrance path leads to a ring path
-// around a fountain, with cross paths out to the side gates.
-const PARK = { cz: 4.5, ring: 1.45, xHalf: 4.6, zMin: FRONTAGE + 0.35, zMax: 7.5, path: 0.34 };
+// around a fountain, with cross paths out to the side gates. PARK is null on
+// levels without one; every bench, seat and path below stays empty then.
 
 // Benches sit outside the ring on the diagonals, facing the fountain.
-const BENCH_RADIUS = PARK.ring + 0.33;
-const benchSeats = [45, 135, 225, 315].flatMap(deg => {
+const benchSeats = !PARK ? [] : [45, 135, 225, 315].flatMap(deg => {
   const a = THREE.MathUtils.degToRad(deg);
   const rotation = Math.atan2(-Math.cos(a), -Math.sin(a));
-  const x = Math.cos(a) * BENCH_RADIUS;
-  const z = PARK.cz + Math.sin(a) * BENCH_RADIUS;
+  const x = Math.cos(a) * (PARK.ring + 0.33);
+  const z = PARK.cz + Math.sin(a) * (PARK.ring + 0.33);
   // Two seats per bench, side by side along the bench.
   return [-0.07, 0.07].map(offset => ({
     bench: { x, z, rotation },
@@ -556,6 +613,7 @@ function parkLamp(x, z, bulbMat) {
 }
 
 function onPath(x, z) {
+  if (!PARK) return false;
   const r = Math.hypot(x, z - PARK.cz);
   return r < PARK.ring + 0.5 // fountain, ring and benches
     || (Math.abs(x) < 0.45 && z < PARK.cz) // entrance path
@@ -664,7 +722,7 @@ function buildPark(jobs, plantMat) {
   for (let placed = 0; placed < 22;) {
     const x = -11 + rand() * 22;
     const z = zMax + 0.4 + rand() * 3;
-    if (ALLEYS.some(ax => Math.abs(x - ax) < ALLEY_HALF + 0.2)) continue;
+    if (LEVEL.paths.some(([x0, z0, x1, z1]) => x > x0 - 0.2 && x < x1 + 0.2 && z > z0 - 0.2 && z < z1 + 0.2)) continue;
     tree(x, z);
     placed++;
   }
@@ -693,19 +751,22 @@ async function buildTown() {
   buildAlleys();
 
   // The hotel in the middle; the bus stop is outside the convenience store.
-  jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => {
-    const c = collect(() => decorateHotel(solidOf(alignFront(obj))));
-    editable('hotel', [obj, ...c.parts], { ...c, points: [HOTEL_DOOR] });
-  }));
-  buildBusStop();
+  if (HOTEL) {
+    jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => {
+      const c = collect(() => decorateHotel(solidOf(alignFront(obj))));
+      editable('hotel', [obj, ...c.parts], { ...c, points: [HOTEL_DOOR] });
+    }));
+  }
+  if (LEVEL.bus) buildBusStop();
 
   // Shops and public buildings, each with a sign and the shops with awnings.
+  const storeDoor = PLACES.get('便利商店')?.door;
   for (const shop of [...SHOPS, ...CIVIC]) {
     const mat = paletteMaterial(commercial, shop.glow, shop.closes);
     jobs.push(building('commercial', shop.model, shop.x, shop, mat).then(obj => {
       const c = collect(() => decorateShop(obj, shop));
       editable(`shop:${shop.name}`, [obj, ...c.parts], {
-        solids: [obj.userData.solid], places: [PLACES.get(shop.name)], points: shop.name === '便利商店' ? [STORE_DOOR] : [],
+        solids: [obj.userData.solid], places: [PLACES.get(shop.name)], points: shop.name === '便利商店' && storeDoor ? [storeDoor] : [],
       });
     }));
   }
@@ -721,21 +782,14 @@ async function buildTown() {
   });
 
   // South of the main street: the park, with a gas station and a car park either side.
-  buildPark(jobs, houseMat);
-  buildGasStation();
-  buildParkingLot();
+  if (PARK) buildPark(jobs, houseMat);
+  if (GAS) buildGasStation();
+  if (LOT) buildParkingLot();
 
-  // Street lamps on both streets, with a real light under each head.
+  // Street lamps from the level, with a real light under each head.
   kit.bulbMat = std(0x222222, { emissive: 0xffd9a0, emissiveIntensity: 0 });
   glowing.push([kit.bulbMat, 6]);
-  const LAMPS = [
-    [STREETS[0], [[-3.3, -1], [-1.25, -1], [2.75, -1], [7.8, -1], [-7.8, -1], [-7.8, 1], [-2.3, 1], [1.3, 1], [4.8, 1], [8, 1]]],
-    [STREETS[1], [[-3.1, 1], [2.0, 1], [-1.1, -1], [3.1, -1], [-10.15, -1], [10.45, -1]]],
-  ];
-  let lampCount = 0;
-  for (const [street, spots] of LAMPS) {
-    for (const [x, side] of spots) jobs.push(streetLamp(`lamp:${lampCount++}`, x, street + side * (ROAD_HALF + 0.12), side));
-  }
+  LEVEL.lamps.forEach((lamp, i) => jobs.push(streetLamp(`lamp:${i}`, lamp.x, lamp.z, lamp.side, lamp.model)));
 
   await Promise.all(jobs);
 }
@@ -760,23 +814,12 @@ function streetLamp(id, x, z, side, model = 'light-square') {
 // zebra crossings are drawn with the painted ones (see paving).
 function buildAlleys() {
   const paving = std(0x9d978c);
-  const spans = [
-    [BACK_SOUTH.front, MAIN_NORTH.front],
-    [MAIN_SOUTH.front, PARK.zMax + 1],
-    [BACK_NORTH.front - 3, BACK_NORTH.front],
-  ];
-  for (const x of ALLEYS) {
-    for (const [z0, z1] of spans) box(ALLEY_HALF * 2, 0.02, z1 - z0, paving, x, 0.01, (z0 + z1) / 2);
-  }
+  for (const [x0, z0, x1, z1] of LEVEL.paths) box(x1 - x0, 0.02, z1 - z0, paving, (x0 + x1) / 2, 0.01, (z0 + z1) / 2);
 }
 
 // ---------- gas station and car park ----------
 
-const GAS = { x: -8, z: MAIN_SOUTH.front + 1.4 };
-const LOT = { x: 8, z: MAIN_SOUTH.front + 1.4 };
-// Two rows of five stalls facing each other across the aisle.
-const PARKING_STALLS = [-1, 1].flatMap(row =>
-  [-1.2, -0.6, 0, 0.6, 1.2].map(dx => ({ x: LOT.x + dx, z: LOT.z + row * 0.65, rot: row > 0 ? Math.PI : 0 })));
+// GAS, LOT and PARKING_STALLS come from LEVEL (see the top of this file).
 
 const asphalt = () => std(0x3a3d44, { roughness: 0.95 });
 
@@ -823,7 +866,7 @@ function buildGasStation() {
   box(0.9, 0.36, 0.55, white, x - 1.1, 0.18, z + 0.7, true);
   solid(x - 1.1, z + 0.7, 0.45, 0.275);
   box(0.6, 0.18, 0.006, light, x - 1.1, 0.17, z + 0.42);
-  poleSign('加油站', '#d2352b', '#ffffff', x + 1.5, MAIN_SOUTH.front + 0.15, 0.7);
+  poleSign('加油站', '#d2352b', '#ffffff', x + 1.5, z - 1.25, 0.7);
 
   const lamp = new THREE.PointLight(0xfff4dc, 0, 2.2, 1.6);
   lamp.position.set(cx, 0.4, z);
@@ -838,7 +881,7 @@ function buildParkingLot() {
   for (const row of [-1, 1]) {
     for (let i = 0; i < 6; i++) box(0.02, 0.004, 0.55, paint, x - 1.5 + i * 0.6, 0.016, z + row * 0.65);
   }
-  poleSign('停車場', '#1f5fae', '#ffffff', x - 1.55, MAIN_SOUTH.front + 0.15, 0.6);
+  poleSign('停車場', '#1f5fae', '#ffffff', x - 1.55, z - 1.25, 0.6);
 }
 
 // ---------- pedestrians ----------
@@ -887,6 +930,270 @@ class Person {
   }
 }
 
+// ---------- pedestrian navigation (P1-A2) ----------
+
+// The walk grid and the cached un-offset paths. Rebuilt in settleTown()
+// whenever tiles, zebras or buildings change; never per frame.
+let walkGrid = null;
+const pathCache = new Map();
+// Snapped doorways, and the nav blocks with their coarse buckets. Solids
+// only move with settleTown/rebuildNav, so the snapshot and the index live
+// as long as the walk grid does.
+const snapCache = new Map();
+let navSolids = [];
+const blockBuckets = new Map();
+
+// The sidewalk rules in one place: the walk grid and the drawn paving both
+// read these. Each entry is a walkable rect plus what drawing needs: the
+// road cell it rings and the strip side, or side 0 for a corner fill.
+function sidewalkRects() {
+  const out = [];
+  const R = CELL / 2;
+  const SW = SIDEWALK;
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  for (const [i, j, kind] of gridCells()) {
+    if (kind !== 'road') continue;
+    const x = i * CELL;
+    const z = j * CELL;
+    const road = (a, b) => tiles.get(cellKey(a, b)) === 'road';
+    const hasN = road(i, j - 1);
+    const hasE = road(i + 1, j);
+    const hasS = road(i, j + 1);
+    const hasW = road(i - 1, j);
+    const openN = j === jMin;
+    const openE = i === iMax;
+    const openS = j === jMax;
+    const openW = i === iMin;
+    if (!hasN && !openN) out.push({ r: [x - R, z - R - SW, x + R, z - R], side: NORTH, x, z });
+    if (!hasS && !openS) out.push({ r: [x - R, z + R, x + R, z + R + SW], side: SOUTH, x, z });
+    if (!hasE && !openE) out.push({ r: [x + R, z - R, x + R + SW, z + R], side: EAST, x, z });
+    if (!hasW && !openW) out.push({ r: [x - R - SW, z - R, x - R, z + R], side: WEST, x, z });
+    const corner = (sx, sz, ha, hb, oa, ob) => {
+      if (ha || hb || oa || ob) return;
+      out.push({
+        r: [x + sx * (R + SW / 2) - SW / 2, z + sz * (R + SW / 2) - SW / 2,
+          x + sx * (R + SW / 2) + SW / 2, z + sz * (R + SW / 2) + SW / 2],
+        side: 0, x, z,
+      });
+    };
+    corner(1, -1, hasE, hasN, openE, openN);
+    corner(-1, -1, hasW, hasN, openW, openN);
+    corner(1, 1, hasE, hasS, openE, openS);
+    corner(-1, 1, hasW, hasS, openW, openS);
+    const inner = (di, dj) => {
+      if (!road(i + di, j) || !road(i, j + dj) || road(i + di, j + dj)) return;
+      out.push({
+        r: [x + di * (R + SW / 2) - SW / 2, z + dj * (R + SW / 2) - SW / 2,
+          x + di * (R + SW / 2) + SW / 2, z + dj * (R + SW / 2) + SW / 2],
+        side: 0, x, z,
+      });
+    };
+    inner(1, -1);
+    inner(-1, -1);
+    inner(1, 1);
+    inner(-1, 1);
+  }
+  return out;
+}
+
+function rebuildNav() {
+  const roads = [];
+  const walks = [];
+  for (const [key, kind] of tiles) {
+    const [i, j] = key.split(',').map(Number);
+    (kind === 'road' ? roads : walks).push([i, j]);
+  }
+  // The park entrance gap is a narrow connector like the alleys: its fence
+  // band only fits through the sampled grid via the clear-corridor rule.
+  const paths = PARK
+    ? [...LEVEL.paths, [-0.45, FRONTAGE - 0.4, 0.45, PARK.cz - PARK.ring + 0.4]]
+    : LEVEL.paths;
+  // The fountain basin blocks like a solid so no path crosses the water.
+  navSolids = PARK
+    ? [...solids, { minX: -0.6, maxX: 0.6, minZ: PARK.cz - 0.6, maxZ: PARK.cz + 0.6 }]
+    : [...solids];
+  blockBuckets.clear();
+  navSolids.forEach((s, k) => {
+    for (let bx = Math.floor(s.minX / CELL); bx <= Math.floor(s.maxX / CELL); bx++) {
+      for (let bz = Math.floor(s.minZ / CELL); bz <= Math.floor(s.maxZ / CELL); bz++) {
+        const key = `${bx},${bz}`;
+        let list = blockBuckets.get(key);
+        if (!list) blockBuckets.set(key, list = []);
+        list.push(k);
+      }
+    }
+  });
+  walkGrid = buildWalkGrid({
+    bounds: LEVEL.bounds, roadCells: roads, walkCells: walks,
+    sidewalkRects: sidewalkRects().map(e => e.r), paths, park: PARK, zebras, solids: navSolids,
+  });
+  pathCache.clear();
+  snapCache.clear();
+}
+
+// Whether the segment cuts through a footprint interior. Only touched
+// edges do not count, matching the strict comparisons of the old sampling.
+function segHitsBlock(x0, z0, x1, z1, s) {
+  let enter = 0;
+  let exit = 1;
+  const dx = x1 - x0;
+  if (!dx) {
+    if (x0 <= s.minX || x0 >= s.maxX) return false;
+  } else {
+    let t0 = (s.minX - x0) / dx;
+    let t1 = (s.maxX - x0) / dx;
+    if (t0 > t1) [t0, t1] = [t1, t0];
+    enter = Math.max(enter, t0);
+    exit = Math.min(exit, t1);
+    if (enter >= exit) return false;
+  }
+  const dz = z1 - z0;
+  if (!dz) {
+    if (z0 <= s.minZ || z0 >= s.maxZ) return false;
+  } else {
+    let t0 = (s.minZ - z0) / dz;
+    let t1 = (s.maxZ - z0) / dz;
+    if (t0 > t1) [t0, t1] = [t1, t0];
+    enter = Math.max(enter, t0);
+    exit = Math.min(exit, t1);
+  }
+  return enter < exit;
+}
+
+// A segment stays clear of every solid footprint (and the fountain basin).
+function segmentBlocked(x0, z0, x1, z1) {
+  const seen = new Set();
+  for (let bx = Math.floor(Math.min(x0, x1) / CELL); bx <= Math.floor(Math.max(x0, x1) / CELL); bx++) {
+    for (let bz = Math.floor(Math.min(z0, z1) / CELL); bz <= Math.floor(Math.max(z0, z1) / CELL); bz++) {
+      const list = blockBuckets.get(`${bx},${bz}`);
+      if (!list) continue;
+      for (const k of list) {
+        if (seen.has(k)) continue;
+        seen.add(k);
+        if (segHitsBlock(x0, z0, x1, z1, navSolids[k])) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The nearest walkable cell to a doorway whose connector stays clear.
+function snapDoor(x, z) {
+  if (!walkGrid) return null;
+  const key = `${x},${z}`;
+  if (snapCache.has(key)) return snapCache.get(key);
+  let found = null;
+  for (const c of snapCandidates(walkGrid, x, z, 4).slice(0, 24)) {
+    if (!segmentBlocked(x, z, c.x, c.z)) {
+      found = c;
+      break;
+    }
+  }
+  snapCache.set(key, found);
+  return found;
+}
+
+function stripCells(cells) {
+  if (cells.length <= 2) return cells;
+  const out = [cells[0]];
+  for (let i = 1; i < cells.length - 1; i++) {
+    const p = out[out.length - 1];
+    const c = cells[i];
+    const n = cells[i + 1];
+    if (Math.sign(c.hi - p.hi) === Math.sign(n.hi - c.hi)
+      && Math.sign(c.hj - p.hj) === Math.sign(n.hj - c.hj)) continue;
+    out.push(c);
+  }
+  out.push(cells[cells.length - 1]);
+  return out;
+}
+
+// The cached un-offset walk points between two snapped cells: zebra
+// crossings first, a cost-25 road crossing only when nothing else
+// connects. Null when the cells do not connect at all.
+function cachedRawPath(a, b) {
+  const key = `${a.hi},${a.hj}>${b.hi},${b.hj}`;
+  let raw = pathCache.get(key);
+  if (!raw) {
+    const cells = stripCells(astar(walkGrid, a, b, false) ?? astar(walkGrid, a, b, true) ?? []);
+    if (!cells.length) return null;
+    const { cols, px, pz } = walkGrid;
+    raw = cells.map(({ hi, hj }) => {
+      const idx = (hj - walkGrid.hj0) * cols + (hi - walkGrid.hi0);
+      return [px[idx], pz[idx]];
+    });
+    pathCache.set(key, raw);
+  }
+  return raw;
+}
+
+// Shifted to the path's right by lane (0..1).
+function lanePoints(raw, lane) {
+  const off = lane * 0.25;
+  return raw.map(([x, z], i) => {
+    const p = raw[Math.max(0, i - 1)];
+    const n = raw[Math.min(raw.length - 1, i + 1)];
+    const dx = n[0] - p[0];
+    const dz = n[1] - p[1];
+    const d = Math.hypot(dx, dz) || 1;
+    return new THREE.Vector3(x - dz / d * off, 0.05, z + dx / d * off);
+  });
+}
+
+// The shifted points between the endpoints, falling back to the un-offset
+// points when the shifted line clips a solid.
+function finishRoute(start, raw, lane, end) {
+  const pts = lanePoints(raw, lane);
+  const full = end ? [start.clone(), ...pts, end.clone()] : [start.clone(), ...pts];
+  if (full.some((q, i) => i && segmentBlocked(full[i - 1].x, full[i - 1].z, q.x, q.z))) {
+    full.splice(1, pts.length, ...raw.map(([x, z]) => new THREE.Vector3(x, 0.05, z)));
+  }
+  const lengths = full.slice(1).map((q, k) => q.distanceTo(full[k]));
+  return { pts: full, lengths, length: lengths.reduce((x, y) => x + y, 0) };
+}
+
+// Door to door along the walk grid: zebra crossings first, a cost-25 road
+// crossing only when nothing else connects. Cached un-offset by snapped
+// endpoints, then cloned and shifted to the path's right by lane (0..1).
+function findRoute(fromDoor, toDoor, lane = 0.5) {
+  if (!walkGrid) return null;
+  const a = snapDoor(fromDoor.x, fromDoor.z);
+  const b = snapDoor(toDoor.x, toDoor.z);
+  if (!a || !b) return null;
+  const raw = cachedRawPath(a, b);
+  if (!raw) return null;
+  return finishRoute(fromDoor, raw, lane, toDoor);
+}
+
+// From an arbitrary spot (not a door) to a walk-grid point.
+function findRoutePos(p, tx, tz, lane = 0.5) {
+  if (!walkGrid) return null;
+  const a = snapDoor(p.x, p.z);
+  const hi = Math.floor(tx / HALF);
+  const hj = Math.floor(tz / HALF);
+  if (!a || hi < walkGrid.hi0 || hi > walkGrid.hi1 || hj < walkGrid.hj0 || hj > walkGrid.hj1) return null;
+  const b = { hi, hj, x: (hi + 0.5) * HALF, z: (hj + 0.5) * HALF };
+  if (!walkGrid.cost[(hj - walkGrid.hj0) * walkGrid.cols + (hi - walkGrid.hi0)]) return null;
+  const raw = cachedRawPath(a, b);
+  if (!raw) return null;
+  return finishRoute(p, raw, lane, null);
+}
+
+function randomWalkCellNear(x, z, minD, maxD) {
+  if (!walkGrid) return null;
+  for (let k = 0; k < 20; k++) {
+    const hi = walkGrid.hi0 + Math.floor(rand() * walkGrid.cols);
+    const hj = walkGrid.hj0 + Math.floor(rand() * walkGrid.rows);
+    const idx = (hj - walkGrid.hj0) * walkGrid.cols + (hi - walkGrid.hi0);
+    if (walkGrid.cost[idx] !== 1) continue;
+    const cx = walkGrid.px[idx];
+    const cz = walkGrid.pz[idx];
+    const d = Math.hypot(cx - x, cz - z);
+    if (d >= minD && d <= maxD) return { x: cx, z: cz };
+  }
+  return null;
+}
+
 class Walker extends Person {
   constructor(gltf, rank) {
     super(gltf, rank);
@@ -894,39 +1201,52 @@ class Walker extends Person {
     this.idle = this.action('idle');
     this.pause = 0;
     this.state = 'walking';
-    this.spawn(-STREET_HALF + rand() * STREET_HALF * 2);
+    this.pts = null;
+    this.seg = 1;
+    const c = walkGrid ? randomWalkCellNear(0, 0, 0, 12) : null;
+    this.obj.position.set(c ? c.x : 0, 0.05, c ? c.z : FRONTAGE);
+    this.face(rand() * Math.PI * 2);
   }
 
-  spawn(x) {
-    this.street = STREETS[Math.floor(rand() * STREETS.length)];
-    this.side = rand() < 0.5 ? -1 : 1;
-    this.dir = rand() < 0.5 ? 1 : -1;
-    // Keep the two walking directions in separate lanes so people rarely overlap.
-    const inner = this.dir * this.side > 0;
-    this.z = this.street + this.side * (inner ? ROAD_HALF + 0.18 + rand() * 0.12 : ROAD_HALF + 0.45 + rand() * 0.18);
-    this.x = x;
-    this.obj.position.z = this.z;
-    this.face(this.dir * Math.PI / 2);
-  }
-
-  // Along the shelter, people on the curb side step over to the shop side.
-  laneZ() {
-    if (this.street !== STREETS[0] || this.side > 0 || Math.abs(this.x - SHELTER_X) > 0.5) return this.z;
-    return Math.min(this.z, -(ROAD_HALF + 0.45));
-  }
-
-  // The outer edge of the sidewalk: house doors on the north side, the park
-  // fence on the south. People go home and come out across it.
-  edgeZ() { return this.street + this.side * (FRONTAGE + 0.02); }
-
-  goHome() {
-    if (this.pause > 0) {
-      this.pause = 0;
-      this.idle.fadeOut(0.3);
-      this.walk.reset().fadeIn(0.3).play();
+  pickGoal() {
+    const p = this.obj.position;
+    for (let k = 0; k < 5; k++) {
+      const c = randomWalkCellNear(p.x, p.z, 4, 12);
+      if (!c) continue;
+      const r = findRoutePos(p, c.x, c.z, 0.5);
+      if (r && r.length > 0.5) {
+        this.pts = r.pts;
+        this.seg = 1;
+        return true;
+      }
     }
-    this.state = 'leaving';
-    this.face(this.side < 0 ? Math.PI : 0);
+    return false;
+  }
+
+  rest() {
+    this.pause = 2 + Math.random() * 4;
+    this.walk.fadeOut(0.3);
+    this.idle.reset().fadeIn(0.3).play();
+  }
+
+  stepAlong(dt) {
+    const p = this.obj.position;
+    const t = this.pts[this.seg];
+    if (!t) return true;
+    const dx = t.x - p.x;
+    const dz = t.z - p.z;
+    const d = Math.hypot(dx, dz);
+    const step = this.speed * dt;
+    if (d <= Math.max(step, 0.03)) {
+      p.set(t.x, 0.05, t.z);
+      this.seg++;
+      return this.seg >= this.pts.length;
+    }
+    p.x += dx / d * step;
+    p.z += dz / d * step;
+    p.y = 0.05;
+    this.face(Math.atan2(dx, dz));
+    return false;
   }
 
   update(dt, activity) {
@@ -935,30 +1255,46 @@ class Walker extends Person {
     const home = this.rank >= activity;
     if (this.state === 'away') {
       if (home) return;
-      this.spawn(STREET_HALF * 0.8 * (Math.random() * 2 - 1));
-      p.set(this.x, 0.05, this.edgeZ());
-      this.face(this.side < 0 ? 0 : Math.PI);
+      const doors = [...PLACES.values()];
+      const door = doors[Math.floor(Math.random() * doors.length)]?.door;
+      if (door) p.set(door.x, 0.05, door.z);
       this.obj.visible = true;
-      this.state = 'arriving';
-      return;
-    }
-    if (this.state === 'arriving' || this.state === 'leaving') {
-      const target = this.state === 'arriving' ? this.laneZ() : this.edgeZ();
-      const step = this.speed * dt;
-      if (Math.abs(target - p.z) > step) {
-        p.z += Math.sign(target - p.z) * step;
-      } else if (this.state === 'leaving') {
-        this.obj.visible = false;
-        this.state = 'away';
-      } else {
-        p.z = target;
-        this.state = 'walking';
-        this.face(this.dir * Math.PI / 2);
-      }
+      this.state = 'walking';
+      this.pts = null;
       return;
     }
     if (home) {
-      this.goHome();
+      if (this.state !== 'leaving') {
+        if (this.pause > 0) {
+          this.pause = 0;
+          this.idle.fadeOut(0.3);
+          this.walk.reset().fadeIn(0.3).play();
+        }
+        let best = null;
+        let bestD = Infinity;
+        for (const pl of PLACES.values()) {
+          const d = Math.hypot(pl.door.x - p.x, pl.door.z - p.z);
+          if (d < bestD) [best, bestD] = [pl.door, d];
+        }
+        for (const h of homeDoors) {
+          const d = Math.hypot(h.door.x - p.x, h.door.z - p.z);
+          if (d < bestD) [best, bestD] = [h.door, d];
+        }
+        const r = best && findRoutePos(p, best.x, best.z, 0.5);
+        if (r && r.pts.length > 1) {
+          this.pts = r.pts;
+          this.seg = 1;
+          this.state = 'leaving';
+        } else {
+          this.obj.visible = false;
+          this.state = 'away';
+          return;
+        }
+      }
+      if (this.stepAlong(dt)) {
+        this.obj.visible = false;
+        this.state = 'away';
+      }
       return;
     }
     if (this.pause > 0) {
@@ -966,28 +1302,29 @@ class Walker extends Person {
       if (this.pause <= 0) {
         this.idle.fadeOut(0.3);
         this.walk.reset().fadeIn(0.3).play();
-        this.face(this.dir * Math.PI / 2);
       }
       return;
     }
-    this.x += this.dir * this.speed * dt;
-    if (Math.abs(this.x) > STREET_HALF) {
-      this.spawn(-Math.sign(this.x) * STREET_HALF);
-    } else if (SHOPS.some(s => s.street === this.street && s.facing === -this.side && Math.abs(this.x - s.x) < 0.3)
-      && Math.random() < dt * 0.15) {
-      // Window shopping: turn to the shop on this side of the street.
-      this.pause = 2 + Math.random() * 4;
-      this.walk.fadeOut(0.3);
-      this.idle.reset().fadeIn(0.3).play();
-      this.face(this.side < 0 ? Math.PI : 0);
+    if (!this.pts) {
+      if (!this.pickGoal()) {
+        this.rest();
+        return;
+      }
     }
-    p.set(this.x, 0.05, THREE.MathUtils.damp(p.z, this.laneZ(), 6, dt));
+    const door = nearShopDoor(p);
+    if (door && Math.random() < dt * 0.15) {
+      // Window shopping: turn to the shop doorway.
+      this.rest();
+      this.face(Math.atan2(door.x - p.x, door.z - p.z));
+      return;
+    }
+    if (this.stepAlong(dt)) this.pts = null;
   }
 }
 
 // Walks laps around the park's ring path, and leaves and returns straight
-// across the lawn among the trees.
-const STROLL_OUT = PARK.ring + 0.6;
+// across the lawn among the trees. Only built when the level has a park.
+const STROLL_OUT = PARK ? PARK.ring + 0.6 : 0;
 
 class Stroller extends Person {
   constructor(gltf, rank) {
@@ -1049,34 +1386,49 @@ class Sitter extends Person {
   }
 }
 
-// Walks once from one point to another, then goes inside (is removed):
-// passengers getting off the bus into the hotel, or out to catch it.
+// Walks once from one point to another along the walk grid, then goes
+// inside (is removed): passengers getting off the bus, or out to catch it.
+// Without a path the passenger never appears.
 class Passenger extends Person {
   constructor(gltf, from, to, delay) {
     super(gltf, 0);
     this.startWalking(0.3);
     this.obj.position.copy(from);
     this.obj.visible = false;
-    this.to = to;
     this.delay = delay;
+    const r = findRoute(from, to, Math.random());
+    if (!r) {
+      this.done = true;
+      scene.remove(this.obj);
+      return;
+    }
+    this.pts = r.pts;
+    this.seg = 1;
   }
 
   update(dt) {
+    if (this.done) return;
     if ((this.delay -= dt) > 0) return;
     this.obj.visible = true;
     this.mixer.update(dt);
     const p = this.obj.position;
-    const dx = this.to.x - p.x;
-    const dz = this.to.z - p.z;
-    const d = Math.hypot(dx, dz);
-    if (d < 0.03) {
+    const t = this.pts[this.seg];
+    if (!t) {
       this.done = true;
       scene.remove(this.obj);
+      return;
+    }
+    const dx = t.x - p.x;
+    const dz = t.z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.03) {
+      this.seg++;
       return;
     }
     const step = Math.min(d, this.speed * dt);
     p.x += dx / d * step;
     p.z += dz / d * step;
+    p.y = 0.05;
     this.face(Math.atan2(dx, dz));
   }
 }
@@ -1089,72 +1441,45 @@ const WALK_SPEED = 22.8; // town units per game hour: 0.38 per second at 60×
 
 const partOfDay = t => (t >= 5 && t < 11 ? 'morning' : t >= 11 && t < 17 ? 'day' : t >= 17 && t < 22 ? 'evening' : 'night');
 
-// Which sidewalk of each street faces the block between the two streets,
-// and where each street can be crossed.
-const BLOCK_SIDE = new Map([[STREETS[0], -1], [STREETS[1], 1]]);
-const crossingsAt = street => zebras.filter(zb => !zb.ns && zb.z === street).map(zb => zb.x);
-
-// A place is a door on a sidewalk: x along the street, the street, which
-// side of it (−1 north, +1 south) and the door point itself.
-function door(x, row) {
-  return { x, street: row.street, side: -row.facing, door: new THREE.Vector3(x, 0.05, row.front + row.facing * 0.05) };
+// A place is a doorway: the door point itself, plus flags for the park and
+// for removed buildings.
+function doorOf(x, front, facing, extra = {}) {
+  return { door: new THREE.Vector3(x, 0.05, front + facing * 0.05), ...extra };
 }
 
 const PLACES = new Map([
-  ...[...SHOPS, ...CIVIC].map(s => [s.name, door(s.x, s)]),
-  [HOTEL.name, { x: 0, street: STREETS[0], side: -1, door: HOTEL_DOOR }],
-  ['公車站', { x: STOP_X - 0.43, street: STREETS[0], side: -1, door: new THREE.Vector3(STOP_X - 0.43, 0.05, -ROAD_HALF - 0.06), away: true }],
-  ['加油站', { x: GAS.x - 1.1, street: STREETS[0], side: 1, door: new THREE.Vector3(GAS.x - 1.1, 0.03, GAS.z + 0.35) }],
-  ['公園', { x: 0, street: STREETS[0], side: 1, door: new THREE.Vector3(0, 0.03, PARK.cz - PARK.ring), park: true }],
+  ...[...SHOPS, ...CIVIC].map(s => [s.name, doorOf(s.x, s.front, s.facing)]),
+  ...(HOTEL ? [[HOTEL.name, { door: HOTEL_DOOR }]] : []),
+  ...(LEVEL.bus ? [['公車站', { door: new THREE.Vector3(STOP_X - 0.43, 0.05, -ROAD_HALF - 0.06) }]] : []),
+  ...(GAS ? [['加油站', { door: new THREE.Vector3(GAS.x - 1.1, 0.05, GAS.z + 0.35) }]] : []),
+  ...(PARK ? [['公園', { door: new THREE.Vector3(0, 0.03, PARK.cz - PARK.ring), park: true }]] : []),
 ]);
 
 // Hand out homes in order: upstairs from the workplace, or the next free
 // town house or villa (villas are shared by families when they run out).
-const homeDoors = HOMES.map(h => door(h.x, h));
+// A missing workplace counts as home.
+const homeDoors = HOMES.map(h => doorOf(h.x, h.front, h.facing));
 const townHouseDoors = homeDoors.filter((_, i) => !HOMES[i].villa);
 const villaDoors = homeDoors.filter((_, i) => HOMES[i].villa);
 let nextTownHouse = 0;
 let nextVilla = 0;
 function homeFor(info) {
-  if (info.home === 'upstairs') return PLACES.get(info.work);
+  if (info.home === 'upstairs') return PLACES.get(info.work) ?? townHouseDoors[0] ?? villaDoors[0];
   if (info.home === 'villa') return villaDoors[nextVilla++ % villaDoors.length];
   return townHouseDoors[nextTownHouse++ % townHouseDoors.length];
 }
 
-// The sidewalk line a resident keeps to; on the main street's north side
-// they keep to the shop side, clear of the bus shelter.
-function walkZ(street, side, lane) {
-  const inner = street === STREETS[0] && side < 0 ? 0.45 : 0.2;
-  return street + side * (ROAD_HALF + inner + lane * 0.3);
-}
-
-// Door to door along sidewalks, crossing a street at a zebra crossing (or
-// straight over where it has none) and changing streets only by a lane.
-function route(a, b, lane) {
-  const pts = [a.door.clone()];
-  const at = (x, street, side) => pts.push(new THREE.Vector3(x, 0.05, walkZ(street, side, lane)));
-  const via = (xs, x0, x1) => xs.reduce((best, x) =>
-    (Math.abs(x0 - x) + Math.abs(x - x1) < Math.abs(x0 - best) + Math.abs(best - x1) ? x : best));
-  at(a.x, a.street, a.side);
-  if (a.street === b.street) {
-    if (a.side !== b.side) {
-      const xs = crossingsAt(a.street);
-      const x = xs.length ? via(xs, a.x, b.x) : a.x;
-      at(x, a.street, a.side);
-      at(x, b.street, b.side);
-    }
-  } else {
-    const x = via(ALLEYS, a.x, b.x) + (lane - 0.5) * 0.4;
-    const aBlock = BLOCK_SIDE.get(a.street);
-    const bBlock = BLOCK_SIDE.get(b.street);
-    at(x, a.street, a.side);
-    if (a.side !== aBlock) at(x, a.street, aBlock);
-    at(x, b.street, bBlock);
-    if (b.side !== bBlock) at(x, b.street, b.side);
+// A shop doorway near a spot, for window shopping.
+function nearShopDoor(p) {
+  let best = null;
+  let bestD = 0.6;
+  for (const s of SHOPS) {
+    const pl = PLACES.get(s.name);
+    if (!pl) continue;
+    const d = Math.hypot(pl.door.x - p.x, pl.door.z - p.z);
+    if (d < bestD) [best, bestD] = [pl.door, d];
   }
-  at(b.x, b.street, b.side);
-  pts.push(b.door.clone());
-  return pts;
+  return best;
 }
 
 class Resident extends Person {
@@ -1165,24 +1490,38 @@ class Resident extends Person {
     this.walk.play();
     this.lane = rand();
     this.strollDir = rand() < 0.5 ? 1 : -1;
-    this.home = homeFor(info);
+    this.home = homeFor(info) ?? [...PLACES.values()][0];
     this.plan();
   }
 
-  // Each leg runs from the previous stop; the first from where yesterday ended.
-  // Going upstairs from the shop below is no walk at all. A stop whose
-  // building has been removed is spent at home instead.
+  // Each leg runs from the actual location the previous leg reached, found
+  // with A*. A leg that cannot be walked stays where it is (stuck: true,
+  // to = at, a single point) and the next leg starts there. The first leg
+  // starts where yesterday ended: plan once from home to learn that spot,
+  // then plan again from it. Going upstairs from the shop below is no walk
+  // at all. A missing destination, or a stop whose building has been
+  // removed, is spent at home instead.
   plan() {
     const stops = this.info.plan.map(([hour, key]) => {
-      const to = key === 'home' ? this.home : PLACES.get(key);
-      return [hour, to.removed ? this.home : to];
+      const dest = key === 'home' ? this.home : PLACES.get(key);
+      return [hour, !dest || dest.removed ? this.home : dest];
     });
-    this.legs = stops.map(([start, to], i) => {
-      const from = stops[(i + stops.length - 1) % stops.length][1];
-      const pts = from === to ? [to.door] : route(from, to, this.lane);
-      const lengths = pts.slice(1).map((q, k) => q.distanceTo(pts[k]));
-      return { start, to, pts, lengths, length: lengths.reduce((a, b) => a + b, 0) };
-    });
+    const run = startAt => {
+      let at = startAt;
+      const legs = [];
+      for (const [start, to] of stops) {
+        if (to === at) {
+          legs.push({ start, to, stuck: false, pts: [to.door.clone()], lengths: [0], length: 0 });
+        } else {
+          const r = findRoute(at.door, to.door, this.lane);
+          if (!r) legs.push({ start, to: at, stuck: true, pts: [at.door.clone()], lengths: [0], length: 0 });
+          else legs.push({ start, to, stuck: false, pts: r.pts, lengths: r.lengths, length: r.length });
+        }
+        at = legs.at(-1).to;
+      }
+      return { legs, end: at };
+    };
+    this.legs = run(run(this.home).end).legs;
   }
 
   speech() {
@@ -1204,7 +1543,7 @@ class Resident extends Person {
       p.lerpVectors(a, b, leg.lengths[k] ? walked / leg.lengths[k] : 1);
       this.face(Math.atan2(b.x - a.x, b.z - a.z));
       this.obj.visible = true;
-    } else if (leg.to.park) {
+    } else if (leg.to.park && !leg.stuck) {
       // In the park: laps of the ring path from the entrance.
       const r = PARK.ring + (this.lane - 0.5) * 0.12;
       const angle = -Math.PI / 2 + this.strollDir * (walked - leg.length) / r;
@@ -1224,13 +1563,13 @@ let peopleGltfs = [];
 async function addPeople() {
   const gltfs = peopleGltfs = await Promise.all(PEOPLE.map(n => model('mini-characters', n)));
   const pick = i => gltfs[i % gltfs.length];
-  for (let i = 0; i < WALKERS; i++) walkers.push(new Walker(pick(i), i / WALKERS));
-  for (let i = 0; i < STROLLERS; i++) walkers.push(new Stroller(pick(i + 5), i / STROLLERS));
+  for (let i = 0; i < WALKERS; i++) walkers.push(new Walker(pick(i), WALKERS ? i / WALKERS : 0));
+  if (PARK) for (let i = 0; i < STROLLERS; i++) walkers.push(new Stroller(pick(i + 5), STROLLERS ? i / STROLLERS : 0));
   // Only some benches are taken, and people sit mostly in the daytime.
   benchSeats.filter((_, i) => i % 3 !== 2).forEach((seat, i) =>
     walkers.push(new Sitter(pick(i + 9), 0.3 + i * 0.12, seat)));
-  SHELTER_SEATS.forEach((seat, i) => walkers.push(new Sitter(pick(i + 3), 0.2 + i * 0.35, seat)));
-  for (const info of RESIDENTS) walkers.push(new Resident(gltfs[PEOPLE.indexOf(`character-${info.look}`)], info));
+  if (LEVEL.bus) SHELTER_SEATS.forEach((seat, i) => walkers.push(new Sitter(pick(i + 3), 0.2 + i * 0.35, seat)));
+  for (const info of LEVEL.residents) walkers.push(new Resident(gltfs[PEOPLE.indexOf(`character-${info.look}`)], info));
   for (const w of walkers) {
     w.obj.visible = w.rank < activity(time);
     if (!w.obj.visible && w.state) w.state = 'away';
@@ -1239,13 +1578,12 @@ async function addPeople() {
 
 // ---------- traffic ----------
 
-// Cars drive the road network: every column of the two streets and every
-// painted road cell is a node, and a car crosses each node on a curve from
-// the side it came in by to the side it leaves by, keeping right. At a
-// junction it picks a way at random, mostly straight on, and turns back at a
-// dead end. Only one car is in a junction at a time. Cars come in out of the
-// fog at either end of the streets and leave past their last column. The bus
-// runs the main street westbound.
+// Cars drive the road network: every road cell is a node, and a car crosses
+// each node on a curve from the side it came in by to the side it leaves by,
+// keeping right. At a junction it picks a way at random, mostly straight on,
+// and turns back at a dead end. Only one car is in a junction at a time. Cars
+// come in out of the fog at the map's edge cells and leave past them. The bus
+// runs its level route, stopping at the stop cell.
 const CARS = ['sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv',
   'van', 'hatchback-sports', 'sedan', 'truck'];
 const PARKED = ['sedan', 'suv', 'van', 'taxi', 'hatchback-sports', 'sedan', 'suv'];
@@ -1253,7 +1591,6 @@ const CAR_SCALE = 0.2;
 const BUS_LENGTH = 1.3;
 const BUS_WIDTH = 0.32;
 const BUS_DWELL = 7;
-const STREET_ENTRY = 7; // street column where cars come in, at the edge of the fog
 const LOOK_AHEAD = 2.5;
 const JUNCTION_RUN = 4; // most junctions in a row a car claims at once
 const vehicles = [];
@@ -1267,50 +1604,111 @@ const isJunction = node => node.links.size !== 2;
 
 // Called whenever the painted roads change. A car whose node is gone leaves;
 // the rest finish the curve they are on and plan again from there.
+const FOG_R = 11; // cars appear at the fog edge, as far out as the old road ends
+const CAM_HOME = { x: 0, z: -2.2 }; // where the camera looks by default
+let edgeEntries = []; // [node key, side it is entered from] at the fog edge
+let busRoute = null; // node keys from the bus entry to its exit, via the stop
+let busStopKey = null; // node key of the bus stop cell
+
 function buildRoads() {
   roads.clear();
   paths.clear();
-  const node = (key, x, z, hx, hz) => roads.set(key, { key, x, z, hx, hz, links: new Map(), holder: null });
+  const node = (key, x, z) => roads.set(key, { key, x, z, hx: CELL / 2, hz: CELL / 2, links: new Map(), holder: null });
   const link = (a, side, b) => {
     roads.get(a).links.set(side, b);
     roads.get(b).links.set(opposite(side), a);
   };
-  STREETS.forEach((street, k) => {
-    const [lo, hi] = streetSpan(k);
-    for (let i = lo; i <= hi; i++) {
-      node(`s${k},${i}`, i * CELL, street, ROAD_HALF, ROAD_HALF);
-      if (i > lo) link(`s${k},${i - 1}`, EAST, `s${k},${i}`);
-    }
-    roads.get(`s${k},${lo}`).links.set(WEST, 'exit');
-    roads.get(`s${k},${hi}`).links.set(EAST, 'exit');
-  });
-  const cells = gridCells().filter(([, , kind]) => kind === 'road');
-  for (const [i, j] of cells) {
-    const z = j * CELL;
-    if (!halfCell(j)) {
-      node(cellKey(i, j), i * CELL, z, ROAD_HALF, ROAD_HALF);
-      continue;
-    }
-    // A stub from the street's edge to the cell's far edge.
-    const s = STREETS.reduce((a, b) => (Math.abs(z - b) < Math.abs(z - a) ? b : a));
-    const near = s + Math.sign(z - s) * ROAD_HALF;
-    const far = z + Math.sign(z - s) * ROAD_HALF;
-    node(cellKey(i, j), i * CELL, (near + far) / 2, ROAD_HALF, Math.abs(far - near) / 2);
+  for (const [i, j, kind] of gridCells()) {
+    if (kind !== 'road') continue;
+    node(cellKey(i, j), i * CELL, j * CELL);
   }
-  for (const [i, j] of cells) {
+  for (const [i, j, kind] of gridCells()) {
+    if (kind !== 'road') continue;
     const key = cellKey(i, j);
-    const z = j * CELL;
-    if (!halfCell(j) && roads.has(cellKey(i + 1, j))) link(key, EAST, cellKey(i + 1, j));
-    for (const [side, edge] of [[NORTH, z - ROAD_HALF], [SOUTH, z + ROAD_HALF]]) {
-      const k = STREETS.findIndex(s => Math.abs(edge - s) <= ROAD_HALF + 1e-6);
-      if (k >= 0) {
-        if (roads.has(`s${k},${i}`)) link(key, side, `s${k},${i}`);
-      } else if (side === SOUTH && roads.has(cellKey(i, j + 1))) {
-        link(key, SOUTH, cellKey(i, j + 1));
-      }
+    if (roads.has(cellKey(i + 1, j))) link(key, EAST, cellKey(i + 1, j));
+    if (roads.has(cellKey(i, j + 1))) link(key, SOUTH, cellKey(i, j + 1));
+  }
+  // A road tile on the bounds edge opens outward; every such side is an exit.
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  for (const [i, j, kind] of gridCells()) {
+    if (kind !== 'road') continue;
+    const n = roads.get(cellKey(i, j));
+    if (i === iMin) n.links.set(WEST, 'exit');
+    if (i === iMax) n.links.set(EAST, 'exit');
+    if (j === jMin) n.links.set(NORTH, 'exit');
+    if (j === jMax) n.links.set(SOUTH, 'exit');
+  }
+  edgeEntries = [];
+  for (const n of roads.values()) {
+    for (const [side, to] of n.links) {
+      if (to === 'exit') edgeEntries.push(entryFromEdge(n, side));
     }
   }
+  computeBusRoute();
   for (const v of vehicles) if (v.onRoad) v.replan();
+}
+
+// From an exit, walk inward along the road to the cell before the first one
+// within FOG_R of the camera home (or before a junction met on the way), so
+// cars appear out of the fog instead of at the road's end.
+function entryFromEdge(edge, exitSide) {
+  let entry = edge;
+  let entryFrom = exitSide;
+  let cur = edge;
+  let arrival = exitSide;
+  for (let k = 0; k < 64 && cur; k++) {
+    if (cur !== edge && (Math.hypot(cur.x - CAM_HOME.x, cur.z - CAM_HOME.z) <= FOG_R || isJunction(cur))) break;
+    entry = cur;
+    entryFrom = arrival;
+    const ways = [...cur.links.entries()].filter(([s, to]) => to !== 'exit' && s !== arrival);
+    if (!ways.length) break;
+    const next = ways.find(([s]) => s === opposite(arrival)) ?? ways[0];
+    arrival = opposite(next[0]);
+    cur = roads.get(next[1]);
+  }
+  return [entry.key, entryFrom];
+}
+
+function bfsRoute(a, b) {
+  if (!roads.has(a) || !roads.has(b)) return null;
+  if (a === b) return [a];
+  const prev = new Map([[a, null]]);
+  const queue = [a];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const to of roads.get(cur).links.values()) {
+      if (to === 'exit' || prev.has(to)) continue;
+      prev.set(to, cur);
+      if (to === b) {
+        const seq = [b];
+        while (seq[0] !== a) seq.unshift(prev.get(seq[0]));
+        return seq;
+      }
+      queue.push(to);
+    }
+  }
+  return null;
+}
+
+// The bus route through the level's entry, stop and exit cells. When edits
+// cut it, no new bus leaves until the road is whole again.
+function computeBusRoute() {
+  busRoute = null;
+  busStopKey = null;
+  const bus = LEVEL.bus;
+  if (!bus) return;
+  const key = ([i, j]) => cellKey(i, j);
+  const first = bfsRoute(key(bus.from), key(bus.stop));
+  const second = bfsRoute(key(bus.stop), key(bus.to));
+  if (!first || !second) return;
+  busRoute = [...first, ...second.slice(1)];
+  busStopKey = key(bus.stop);
+}
+
+function busExitSide(key) {
+  const n = roads.get(key);
+  if (!n) return null;
+  return [...n.links.entries()].find(([, to]) => to === 'exit')?.[0] ?? null;
 }
 
 // The curve across a node: in at the right-hand half of one side, out at the
@@ -1499,9 +1897,40 @@ class Bus extends Vehicle {
     this.cooldown = 2;
   }
 
-  chooseExit(node, from) { return opposite(from); }
+  // Along its route while the road is whole; straight on anywhere else, so a
+  // bus kept driving by edits still finds its way like an ordinary car.
+  // The route may repeat nodes (a stop in a spur is driven out and back),
+  // so each planned segment carries its route index and the next one
+  // continues the previously planned segment, not the first matching key.
+  busNextAt(node) {
+    if (!busRoute) return null;
+    const prev = this.path.at(-1);
+    if (!prev) return busRoute[0] === node.key ? 0 : null;
+    if (prev.exit || prev.routeAt == null) return null;
+    return busRoute[prev.routeAt] === prev.node.key && busRoute[prev.routeAt + 1] === node.key
+      ? prev.routeAt + 1 : null;
+  }
+
+  step(node, from) {
+    const seg = super.step(node, from);
+    seg.routeAt = this.busNextAt(node);
+    return seg;
+  }
+
+  chooseExit(node, from) {
+    if (busRoute) {
+      const at = this.busNextAt(node);
+      if (at != null) {
+        const next = busRoute[at + 1];
+        if (next === undefined) return busExitSide(node.key) ?? opposite(from);
+        return [...node.links.entries()].find(([, to]) => to === next)?.[0] ?? opposite(from);
+      }
+    }
+    return opposite(from);
+  }
 
   enter(key, from) {
+    this.path = []; // step() below then sees the entry as the route start
     super.enter(key, from);
     this.state = 'arriving';
   }
@@ -1511,10 +1940,30 @@ class Bus extends Vehicle {
     this.cooldown = 12 + Math.random() * 8;
   }
 
+  // The roads were redrawn: keep the curve it is on, then plan again from
+  // the route occurrence it matches. Off the route it just drives on.
+  replan() {
+    const seg = this.path[0];
+    const node = roads.get(seg.node.key);
+    if (!node) return this.leave();
+    this.path = [{ ...seg, node }];
+    this.held = [];
+    if (isJunction(node) && !node.holder) {
+      node.holder = this;
+      this.held.push(node);
+    }
+    this.path[0].routeAt = busRoute ? busLocate(this.path[0]) : null;
+  }
+
   desiredSpeed(dt) {
     if (this.state === 'arriving') {
-      const left = this.pos.x - STOP_X;
-      if (left < 0.02 && this.speed < 0.05) {
+      // The route was cut while driving: carry on as an ordinary car.
+      const left = busRoute ? busRemaining(this) : Infinity;
+      if (!Number.isFinite(left)) {
+        this.state = 'leaving';
+        return this.cruise;
+      }
+      if (left < 0.03 && this.speed < 0.05) {
         this.state = 'dwelling';
         this.wait = BUS_DWELL;
         unloadBus(this);
@@ -1531,15 +1980,71 @@ class Bus extends Vehicle {
   }
 }
 
+// How far the bus still has to drive to the middle of its stop cell,
+// measured along its route; Infinity once it has left the route or passed
+// the stop (edited roads), in which case it just drives on.
+function busRemaining(bus) {
+  const seg = bus.path[0];
+  const at = seg.routeAt;
+  const stop = busRoute.indexOf(busStopKey);
+  if (at == null || at < 0 || stop < 0 || at > stop) return Infinity;
+  if (busRoute[at] !== seg.node.key) return Infinity;
+  if (at === stop) return seg.curve.len / 2 - bus.s;
+  if (sideTo(seg.node.key, busRoute[at + 1]) !== seg.to) return Infinity;
+  let left = seg.curve.len - bus.s;
+  for (let k = at + 1; k <= stop; k++) {
+    const node = roads.get(busRoute[k]);
+    const from = sideTo(busRoute[k], busRoute[k - 1]);
+    const to = sideTo(busRoute[k], busRoute[k + 1]);
+    if (!node || from === undefined || to === undefined) return Infinity;
+    const curve = pathThrough(node, from, to);
+    left += k === stop ? curve.len / 2 : curve.len;
+  }
+  return left;
+}
+
+function sideTo(a, b) {
+  const node = roads.get(a);
+  if (!node) return undefined;
+  return [...node.links].find(([, key]) => key === b)?.[0];
+}
+
+// The route occurrence a kept curve belongs to after the roads were
+// redrawn: the one entered and left the same way. Null when the bus has
+// left the route, so it just drives on like an ordinary car.
+function busLocate(seg) {
+  for (let i = 0; i < busRoute.length; i++) {
+    if (busRoute[i] !== seg.node.key) continue;
+    const prev = busRoute[i - 1];
+    const next = busRoute[i + 1];
+    const fromOk = prev === undefined
+      ? seg.node.links.get(seg.from) === 'exit'
+      : sideTo(seg.node.key, prev) === seg.from;
+    if (!fromOk) continue;
+    const toOk = next === undefined
+      ? seg.node.links.get(seg.to) === 'exit'
+      : sideTo(seg.node.key, next) === seg.to;
+    if (toOk) return i;
+  }
+  return null;
+}
+
 // A few riders step off at the front door and walk into the hotel or the
 // store, and a guest or two come out to board. Late at night it is quiet.
 function unloadBus(bus) {
   if (!peopleGltfs.length) return;
-  const door = new THREE.Vector3(bus.pos.x + bus.heading.x * (BUS_LENGTH / 2 - 0.22), 0.05, -ROAD_HALF - 0.06);
+  // The door sits ahead of the middle, on the travel-right curb side.
+  const side = new THREE.Vector3(-bus.heading.z, 0, bus.heading.x);
+  const door = bus.pos.clone().addScaledVector(bus.heading, BUS_LENGTH / 2 - 0.22).addScaledVector(side, ROAD_HALF + 0.06 - LANE / 2);
+  door.y = 0.05;
   const pick = () => peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
   const late = activity(time) < 0.15;
   const off = late ? Number(Math.random() < 0.4) : 1 + Math.floor(Math.random() * 3);
-  const inside = () => (Math.random() < 0.6 ? HOTEL_DOOR : STORE_DOOR);
+  const riderDoors = (LEVEL.bus.riders ?? []).map(n => PLACES.get(n)?.door).filter(Boolean);
+  const fallback = [...PLACES.values()][0]?.door ?? door;
+  const inside = () => riderDoors.length
+    ? riderDoors[Math.floor(Math.random() * riderDoors.length)]
+    : fallback;
   for (let i = 0; i < off; i++) walkers.push(new Passenger(pick(), door, inside(), 0.6 + i * 0.9));
   const on = late ? 0 : Math.floor(Math.random() * 3);
   for (let i = 0; i < on; i++) walkers.push(new Passenger(pick(), inside(), door, i * 1.2));
@@ -1614,23 +2119,25 @@ async function addTraffic() {
     const { group, length } = makeCar(gltf, headMat, tailMat);
     vehicles.push(new Vehicle(group, length, 0.9 + rand() * 0.35, i / cars.length));
   });
-  vehicles.push(new Bus(makeBus(wheel, headMat, tailMat)));
+  if (LEVEL.bus) vehicles.push(new Bus(makeBus(wheel, headMat, tailMat)));
 
   // Parked cars in the car park, lights off.
-  const off = std(0x333333);
-  const parked = await Promise.all(PARKED.map(n => model('car-kit', n)));
-  parked.forEach((gltf, i) => {
-    const stall = PARKING_STALLS[(i * 3) % PARKING_STALLS.length];
-    const { group } = makeCar(gltf, off, off);
-    group.position.set(stall.x, 0.012, stall.z);
-    group.rotation.y = stall.rot;
-    scene.add(group);
-    solid(stall.x, stall.z, 0.16, 0.27);
-  });
+  if (LOT) {
+    const off = std(0x333333);
+    const parked = await Promise.all(PARKED.map(n => model('car-kit', n)));
+    parked.forEach((gltf, i) => {
+      const stall = PARKING_STALLS[(i * 3) % PARKING_STALLS.length];
+      const { group } = makeCar(gltf, off, off);
+      group.position.set(stall.x, 0.012, stall.z);
+      group.rotation.y = stall.rot;
+      scene.add(group);
+      solid(stall.x, stall.z, 0.16, 0.27);
+    });
+  }
 }
 
-// Waiting vehicles come in at either end of a street once the way in is
-// clear; the bus always at the main street's east end.
+// Waiting vehicles come in at the fog edge once the way in is clear; the
+// bus only while its route through the level is whole, at its entry cell.
 function updateTraffic(dt, activity) {
   const people = walkers.filter(w => w.obj.visible).map(w => w.obj.position);
   if (player.active) people.push(player.pos);
@@ -1639,10 +2146,18 @@ function updateTraffic(dt, activity) {
     if (v.onRoad) v.drive(dt, people, busy);
     else v.cooldown -= dt;
   }
-  const entries = STREETS.flatMap((_, k) => [[`s${k},${-STREET_ENTRY}`, WEST], [`s${k},${STREET_ENTRY}`, EAST]]);
   for (const v of vehicles) {
     if (v.onRoad || v.cooldown > 0 || v.rank >= activity) continue;
-    const ways = v instanceof Bus ? [[`s0,${STREET_ENTRY}`, EAST]] : [...entries].sort(() => Math.random() - 0.5);
+    let ways;
+    if (v instanceof Bus) {
+      if (!busRoute) continue;
+      const from = busExitSide(busRoute[0]);
+      if (from === null) continue;
+      ways = [[busRoute[0], from]];
+    } else {
+      if (!edgeEntries.length) continue;
+      ways = [...edgeEntries].sort(() => Math.random() - 0.5);
+    }
     const way = ways.find(([key, from]) => {
       const node = roads.get(key);
       if (!node || node.holder) return false;
@@ -1732,7 +2247,7 @@ const slider = $('time');
 let dragging = false;
 slider.addEventListener('pointerdown', () => { dragging = true; });
 addEventListener('pointerup', () => { dragging = false; });
-slider.addEventListener('input', () => { time = +slider.value; });
+slider.addEventListener('input', () => { setTime(+slider.value); });
 
 function setSpeed(s) {
   if (s) lastSpeed = s;
@@ -1740,7 +2255,7 @@ function setSpeed(s) {
   document.querySelectorAll('[data-speed]').forEach(b => b.classList.toggle('on', +b.dataset.speed === s));
 }
 document.querySelectorAll('[data-speed]').forEach(b => b.addEventListener('click', () => { setSpeed(+b.dataset.speed); b.blur(); }));
-document.querySelectorAll('[data-time]').forEach(b => b.addEventListener('click', () => { time = +b.dataset.time; b.blur(); }));
+document.querySelectorAll('[data-time]').forEach(b => b.addEventListener('click', () => { setTime(+b.dataset.time); b.blur(); }));
 // The panel can collapse to just the clock; the choice is remembered per browser.
 const panel = document.querySelector('.panel');
 const toggle = $('toggle');
@@ -1771,11 +2286,20 @@ function updateUI() {
   if (!dragging) slider.value = time;
 }
 
+// Midnight wrapping in the main loop, or a jump backwards from a preset or
+// the slider, turns the game day over: the found cats queue up to hide again.
+function setTime(next) {
+  next %= 24;
+  if (next < time) startNewDay();
+  time = next;
+}
+
 // ---------- cats ----------
 
 // Eight cats, each with its own coat, hide around town. Click one to find
-// it: it meows, hearts float up and it slips off to another hiding spot.
-// Their eyes shine at night, which makes them easier to spot after dark.
+// it: it meows, hearts float up and it stays gone for the rest of the game
+// day, hiding again somewhere new after midnight. Their eyes shine at
+// night, which makes them easier to spot after dark.
 const CATS = [
   { name: '橘子', coat: 0xe8913a, patch: 0xfbd3a0, eyes: 0x9be564 },
   { name: '煤球', coat: 0x2a2a2f, patch: 0x2a2a2f, eyes: 0xf5d547 },
@@ -1789,15 +2313,9 @@ const CATS = [
 const CAT_LINES = ['喵～被你找到了！', '（伸懶腰）', '呼嚕呼嚕……', '喵？你看得到我？', '（舔爪子）', '這裡曬太陽最舒服。'];
 const CAT_SCALE = 0.8;
 
-// Hiding spots as x, z; the height is wherever a ray from above lands, so
-// a spot can be a rooftop, an awning, a car roof or a tree.
-const CAT_SPOTS = [
-  [-1.72, -2.1], [-2.72, -2.1], [1.72, -2.1], [0.45, -2.6], [2.5, -4.9],
-  [-4.55, -9.3], [4.55, -9.3], [-7.2, -9.5], [8.2, -9.4],
-  [SHELTER_X, SHELTER_Z], [0.2, -1.47], [GAS.x + 0.3, GAS.z], [PARKING_STALLS[3].x, PARKING_STALLS[3].z],
-  [ALLEYS[0], -3.6], [ALLEYS[1], -4.6], [0.53, PARK.cz], [-0.95, PARK.cz + 0.25],
-  [3.2, PARK.zMax + 0.6], [-6.5, PARK.zMax + 1.2], [-3.4, PARK.cz + 1.6],
-];
+// Hiding spots come from the level as x, z; the height is wherever a ray
+// from above lands, so a spot can be a rooftop, an awning, a car roof or
+// a tree.
 
 const cats = [];
 const catSpots = [];
@@ -1849,6 +2367,7 @@ class Cat {
     this.phase = rand() * 10;
     this.bubbleY = 0.16;
     this.poof = 0; // > 0 while shrinking away, < 0 while popping up again
+    this.gone = false; // found today: hidden until the next game day
     scene.add(this.obj);
   }
 
@@ -1856,20 +2375,36 @@ class Cat {
     return { name: this.info.name, role: '貓咪', line: CAT_LINES[Math.floor(Math.random() * CAT_LINES.length)] };
   }
 
+  // Claim a spot and sit on whatever is below it now; the height is measured
+  // here, so moving a building only re-seats the cats on it. The cat hides
+  // from its own ray so the ray lands on the roof, not on fur.
   hideAt(spot) {
     this.spot = spot;
+    this.gone = false;
+    this.obj.visible = false;
+    spot.y = surfaceY(spot.x, spot.z);
+    this.obj.visible = true;
     this.obj.position.copy(spot);
     this.obj.rotation.y = Math.random() * Math.PI * 2;
   }
 
   // Slip away to a free spot: shrink, move, pop up again.
   sneakOff(delay = 0) {
-    if (this.poof) return;
+    if (this.poof || this.gone) return;
     this.wait = delay;
     this.poof = 0.35;
   }
 
+  // Found by the player: shrink away like a sneak-off, then stay gone until
+  // the next game day instead of popping up elsewhere.
+  vanish(delay = 0) {
+    if (this.gone || this.poof) return;
+    this.farewell = true;
+    this.sneakOff(delay);
+  }
+
   update(dt) {
+    if (this.gone) return;
     this.phase += dt;
     this.tail.rotation.x = Math.sin(this.phase * 2.2) * 0.45;
     this.head.rotation.y = Math.sin(this.phase * 0.7) * 0.35;
@@ -1880,10 +2415,21 @@ class Cat {
       this.poof = Math.max(0, this.poof - dt);
       size *= this.poof / 0.35;
       if (this.poof === 0) {
-        const taken = new Set(cats.map(c => c.spot));
-        const free = catSpots.filter(sp => !taken.has(sp));
-        this.hideAt(free[Math.floor(Math.random() * free.length)]);
-        this.poof = -0.35;
+        if (this.farewell) {
+          this.farewell = false;
+          this.spot = null;
+          this.gone = true;
+          this.obj.visible = false;
+          this.obj.scale.setScalar(CAT_SCALE);
+        } else {
+          const free = freeSpots();
+          if (!free.length) {
+            this.poof = 0;
+          } else {
+            this.hideAt(free[Math.floor(Math.random() * free.length)]);
+            this.poof = -0.35;
+          }
+        }
       }
     } else if (this.poof < 0) {
       this.poof = Math.min(0, this.poof + dt);
@@ -1907,19 +2453,46 @@ function surfaceY(x, z) {
   return hit ? hit.point.y : 0;
 }
 
+// Spots no cat sits on; a found cat holds none until it hides again.
+function freeSpots() {
+  const taken = new Set(cats.map(c => c.spot));
+  return catSpots.filter(sp => !taken.has(sp));
+}
+
 // The town book: found cats, the number of finds, blessings seen and
-// coins thrown, kept in this browser.
-const CAT_KEY = 'small-town:cats';
+// coins thrown, kept per level in this browser. The old shared key moves to
+// the town level only when the town has no book of its own yet; the old key
+// stays, and a newer per-level book is never overwritten by the stale one.
+const CAT_KEY = `small-town:cats:${LEVEL.id}`;
 let catBook = { found: [], finds: 0, blessings: [], coins: 0 };
-try { catBook = { ...catBook, ...JSON.parse(localStorage.getItem(CAT_KEY) || '{}') }; } catch { /* storage unavailable */ }
+try {
+  const raw = localStorage.getItem(CAT_KEY);
+  if (raw == null) {
+    const old = JSON.parse(localStorage.getItem('small-town:cats') || 'null');
+    if (old && typeof old === 'object') {
+      catBook = { ...catBook, ...old };
+      try { localStorage.setItem(CAT_KEY, JSON.stringify(catBook)); } catch { /* storage unavailable */ }
+    }
+  } else {
+    catBook = { ...catBook, ...JSON.parse(raw) };
+  }
+} catch { /* storage unavailable */ }
 
 const hex = c => `#${c.toString(16).padStart(6, '0')}`;
 function saveBook() {
   try { localStorage.setItem(CAT_KEY, JSON.stringify(catBook)); } catch { /* storage unavailable */ }
 }
+const hasWishes = () => LEVEL.wishes !== false && !!PARK;
 function drawCatBook(fresh) {
-  $('cat-count').textContent = `${catBook.found.length}/${CATS.length}`;
-  $('cat-row').replaceChildren(...CATS.map(c => {
+  const showCats = LEVEL.cats.length > 0;
+  const showWishes = hasWishes();
+  $('cat-count').parentElement.style.display = showCats ? '' : 'none';
+  $('cat-row').style.display = showCats ? '' : 'none';
+  $('wish-count').parentElement.style.display = showWishes ? '' : 'none';
+  $('wish-row').style.display = showWishes ? '' : 'none';
+  const breeds = cats.map(c => c.info);
+  $('cat-count').textContent = `${catBook.found.filter(n => breeds.some(c => c.name === n)).length}/${breeds.length}`;
+  $('cat-row').replaceChildren(...breeds.map(c => {
     const chip = document.createElement('span');
     const found = catBook.found.includes(c.name);
     chip.className = `chip${found ? ' found' : ''}${c.name === fresh ? ' pop' : ''}`;
@@ -1941,8 +2514,11 @@ function drawCatBook(fresh) {
   }));
   const parts = [];
   if (catBook.finds) parts.push(`找到貓 ${catBook.finds} 次`);
-  if (catBook.coins) parts.push(`許願 ${catBook.coins} 次`);
-  $('cat-total').textContent = parts.length ? parts.join('・') : '貓咪躲在小鎮各處；點噴水池可以許願';
+  if (showWishes && catBook.coins) parts.push(`許願 ${catBook.coins} 次`);
+  $('cat-total').textContent = parts.length ? parts.join('・')
+    : showCats && showWishes ? '貓咪躲在小鎮各處；點噴水池可以許願'
+    : showCats ? '貓咪躲在小鎮各處'
+    : showWishes ? '點噴水池可以許願' : '';
 }
 
 function findCat(cat) {
@@ -1951,7 +2527,7 @@ function findCat(cat) {
   catBook.finds++;
   saveBook();
   drawCatBook(fresh ? cat.info.name : null);
-  cat.sneakOff(1.6);
+  cat.vanish(1.6);
 }
 
 // Hearts in many colours float up from where the cat was clicked.
@@ -1974,23 +2550,40 @@ function hearts(x, y) {
 function addCats() {
   // Nothing has been rendered yet, so bring world matrices up to date for the rays.
   scene.updateMatrixWorld(true);
-  for (const [x, z] of CAT_SPOTS) catSpots.push(new THREE.Vector3(x, surfaceY(x, z), z));
+  for (const [x, z] of LEVEL.cats) catSpots.push(new THREE.Vector3(x, 0, z));
   const order = [...catSpots].sort(() => Math.random() - 0.5);
-  CATS.forEach((info, i) => {
+  CATS.slice(0, catSpots.length).forEach(info => {
     const cat = new Cat(info);
-    cat.hideAt(order[i]);
+    cat.hideAt(order[cats.length]);
     cats.push(cat);
   });
   drawCatBook();
 }
 
-// Now and then a cat wanders off to somewhere new on its own.
+// Now and then a cat wanders off to somewhere new on its own. Cats found
+// earlier come back one per frame after the day turns over, each measuring
+// its new spot as it hides.
 let wanderIn = 45;
+const dayQueue = [];
+function startNewDay() {
+  for (const cat of cats) if (cat.gone && !dayQueue.includes(cat)) dayQueue.push(cat);
+}
 function updateCats(dt) {
+  if (dayQueue.length) {
+    const cat = dayQueue.shift();
+    const free = freeSpots();
+    if (free.length) {
+      cat.hideAt(free[Math.floor(Math.random() * free.length)]);
+      cat.poof = -0.35;
+    } else dayQueue.push(cat);
+  }
   for (const cat of cats) cat.update(dt);
+  if (!cats.length) return;
   if ((wanderIn -= dt) > 0) return;
   wanderIn = 40 + Math.random() * 50;
-  const cat = cats[Math.floor(Math.random() * cats.length)];
+  const awake = cats.filter(c => !c.gone);
+  if (!awake.length) return;
+  const cat = awake[Math.floor(Math.random() * awake.length)];
   if (cat !== talking) cat.sneakOff();
 }
 
@@ -2002,7 +2595,7 @@ const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3);
 let pointerOnGround = null;
 
 // The fountain speaks for the coin: a plain wish, or the blessing it brought.
-const fountainVoice = { obj: { position: new THREE.Vector3(0, 0.1, PARK.cz), visible: true }, bubbleY: 0.6 };
+const fountainVoice = { obj: { position: new THREE.Vector3(0, 0.1, PARK ? PARK.cz : 0), visible: true }, bubbleY: 0.6 };
 
 function wishResult({ line, blessing }) {
   catBook.coins++;
@@ -2031,7 +2624,12 @@ function announce(text, color) {
 }
 
 function addWishes() {
+  if (LEVEL.wishes === false || !PARK) return;
   patchSnow(scene);
+  // Lane metadata for the blessings, derived from this level's own paths and
+  // roads, so wishes.js needs no fixed-street assumptions.
+  const alleyXs = [...new Set(LEVEL.paths.map(([x0, , x1]) => (x0 + x1) / 2))];
+  const back = Math.min(...LEVEL.roads.map(([, j0, , j1]) => Math.min(j0, j1) * CELL));
   wishes = createWishes({
     scene,
     camera,
@@ -2040,7 +2638,7 @@ function addWishes() {
     getTime: () => time,
     setCrowdBoost: v => { crowdBoost = v; },
     pointerGround: () => pointerOnGround,
-    streets: { back: STREETS[1], alleys: ALLEYS },
+    streets: { back, alleys: alleyXs.length ? alleyXs : [0] },
   });
 }
 
@@ -2078,17 +2676,17 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (editing || e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   aim(e);
   const targets = [
-    ...wishes.clickables(),
-    ...[...walkers.filter(w => w.obj.visible), ...cats.filter(c => !c.poof)].map(w => w.hit),
-    fountain.hit,
+    ...(wishes ? wishes.clickables() : []),
+    ...[...walkers.filter(w => w.obj.visible), ...cats.filter(c => !c.poof && !c.gone)].map(w => w.hit),
+    ...(fountain.hit ? [fountain.hit] : []),
   ];
   const hit = raycaster.intersectObjects(targets, false)[0];
   if (!hit) return;
   const data = hit.object.userData;
   if (data.onClick) return data.onClick();
   if (data.fountain) {
-    // One coin in the air at a time.
-    if (!wishes.flying()) wishes.throwCoin(wishResult);
+    // One coin in the air at a time; silent when this level has no wishes.
+    if (wishes && !wishes.flying()) wishes.throwCoin(wishResult);
     return;
   }
   const speaker = data.person ?? data.cat;
@@ -2135,8 +2733,15 @@ const WALK = 0.825;
 const RUN = 1.25;
 const JUMP_SPEED = 1.6;
 const GRAVITY = 6;
-const BOUNDS = { minX: -12.5, maxX: 12.5, minZ: BACK_NORTH.front - 2.8, maxZ: PARK.zMax + 3 };
-const player = { active: false, look: 'male-f', name: '', outfit: {}, pos: new THREE.Vector3(0.6, 0, MAIN_SOUTH.front - 0.35), obj: null, air: 0, vy: 0 };
+// The player stays inside the level's map extents.
+const BOUNDS = (() => {
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  return {
+    minX: (2 * iMin - 1) * HALF, maxX: (2 * iMax + 1) * HALF,
+    minZ: (2 * jMin - 1) * HALF, maxZ: (2 * jMax + 1) * HALF,
+  };
+})();
+const player = { active: false, look: 'male-f', name: '', outfit: {}, pos: new THREE.Vector3(0.6, 0, FRONTAGE - 0.35), obj: null, air: 0, vy: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}');
   Object.assign(player, { look: saved.look ?? player.look, name: saved.name ?? '', outfit: saved.outfit ?? {} });
@@ -2153,16 +2758,22 @@ const keys = new Set();
 const stick = { x: 0, y: 0 };
 const overview = { pos: camera.position.clone(), target: controls.target.clone() };
 
-// Road, sidewalks and park paths sit a little above the grass.
+// Road, sidewalks, paths and park paths sit a little above the grass.
 function groundHeight(x, z) {
   const tile = tiles.get(cellKey(Math.round(x / CELL), Math.round(z / CELL)));
   if (tile) return tile === 'walk' ? 0.05 : 0.02;
-  for (const street of STREETS) {
-    const d = Math.abs(z - street);
-    if (d < ROAD_HALF) return 0.02;
-    if (d < FRONTAGE) return 0.05;
+  // The automatic sidewalks ringing each road tile.
+  for (const [key] of tiles) {
+    if (tiles.get(key) !== 'road') continue;
+    const [i, j] = key.split(',').map(Number);
+    const dx = Math.abs(x - i * CELL);
+    const dz = Math.abs(z - j * CELL);
+    if (dx < CELL / 2 + SIDEWALK && dz < CELL / 2 + SIDEWALK && (dx > CELL / 2 || dz > CELL / 2)) return 0.05;
   }
-  return Math.abs(x) < PARK.xHalf && z > PARK.zMin && z < PARK.zMax ? 0.02 : 0;
+  if (LEVEL.paths.some(([x0, z0, x1, z1]) => x >= x0 && x <= x1 && z >= z0 && z <= z1)) return 0.02;
+  const P = PARK;
+  if (P && Math.abs(x) < P.xHalf && z > P.zMin && z < P.zMax) return 0.02;
+  return 0;
 }
 
 // Push the player's circle out of every footprint and post, then keep it in town.
@@ -2243,7 +2854,7 @@ function togglePlay() {
     player.obj = null;
     camera.position.copy(overview.pos);
     controls.target.copy(overview.target);
-    Object.assign(controls, { minDistance: 3, maxDistance: 35, maxPolarAngle: 1.32 });
+    Object.assign(controls, { minDistance: 3, maxDistance: 40, maxPolarAngle: 1.32 });
     $('prompt').hidden = true;
   }
 }
@@ -2403,11 +3014,12 @@ function nearby() {
     if (d < bestD) [best, bestD] = [{ kind: 'person', it: w }, d];
   }
   for (const c of cats) {
-    if (c.poof || Math.abs(c.obj.position.y - p.y) > 0.3) continue;
+    if (c.gone || c.poof || Math.abs(c.obj.position.y - p.y) > 0.3) continue;
     const d = Math.hypot(c.obj.position.x - p.x, c.obj.position.z - p.z);
     if (d < bestD) [best, bestD] = [{ kind: 'cat', it: c }, d];
   }
-  if (!best && Math.hypot(p.x, p.z - PARK.cz) < 0.62 + 0.35) best = { kind: 'fountain' };
+  if (!best && PARK && wishes && fountain.hit
+    && Math.hypot(p.x, p.z - PARK.cz) < 0.62 + 0.35) best = { kind: 'fountain' };
   return best;
 }
 
@@ -2422,7 +3034,7 @@ function interact() {
   const target = nearby();
   if (!target) return;
   if (target.kind === 'fountain') {
-    if (!wishes.flying()) wishes.throwCoin(wishResult);
+    if (wishes && !wishes.flying()) wishes.throwCoin(wishResult);
     return;
   }
   const it = target.it;
@@ -2556,7 +3168,6 @@ function updatePlayer(dt) {
 // one lives in a pivot group with its signs, awnings and lights; its
 // footprint, posts and doors are kept in the pivot's space and put back into
 // the world after every change. Changes are saved in this browser.
-const LAYOUT_KEY = 'small-town:layout';
 const SNAP = 0.1;
 const editables = new Map();
 const undos = [];
@@ -2629,13 +3240,7 @@ function applyState(item, { x, z, rot, removed }) {
   }
   for (const { p, at } of item.posts) Object.assign(p, { x: world(at).x, z: world(at).z });
   for (const { v, at } of item.points) [v.x, v.z] = [world(at).x, world(at).z];
-  for (const { pl, at } of item.places) {
-    [pl.door.x, pl.door.z] = [world(at).x, world(at).z];
-    // The sidewalk it now opens onto.
-    pl.street = STREETS.reduce((a, b) => (Math.abs(pl.door.z - b) < Math.abs(pl.door.z - a) ? b : a));
-    pl.side = pl.door.z < pl.street ? -1 : 1;
-    pl.x = pl.door.x;
-  }
+  for (const { pl, at } of item.places) [pl.door.x, pl.door.z] = [world(at).x, world(at).z];
   if (removed !== item.removed) {
     item.removed = removed;
     item.pivot.visible = !removed;
@@ -2645,18 +3250,41 @@ function applyState(item, { x, z, rot, removed }) {
   }
 }
 
-// Residents re-plan their walks and the cats settle onto whatever is below them now.
+// The walk grid is rebuilt and cached paths cleared, and residents re-plan
+// their walks. Cats keep their spots: a hiding spot's height is measured
+// when a cat hides there, and only cats on a changed building are re-seated.
 function settleTown() {
+  rebuildNav();
   for (const w of walkers) if (w instanceof Resident) w.plan();
-  scene.updateMatrixWorld(true);
-  for (const spot of catSpots) spot.y = surfaceY(spot.x, spot.z);
-  for (const cat of cats) if (!cat.poof) cat.obj.position.copy(cat.spot);
 }
 
-// Only what differs from the default town.
+// A building's footprint for the cats: its solids and posts in world space,
+// padded a touch so a cat perched on an edge still counts as on it.
+const SEAT_PAD = 0.03;
+function footprintOf(item) {
+  const rects = item.solids.map(({ s }) => ({ minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ }));
+  for (const { p } of item.posts) rects.push({ minX: p.x, maxX: p.x, minZ: p.z, maxZ: p.z });
+  return rects;
+}
+
+// After a building moves, only the cats sitting on its old or new footprint
+// need a new height: a cat on a moved-away roof drops to what is below, and
+// a building put down over a cat lifts it onto the roof. Paving never comes
+// through here.
+function reseatCats(before, after) {
+  for (const cat of cats) {
+    if (cat.gone || !cat.spot) continue;
+    const on = r => cat.spot.x >= r.minX - SEAT_PAD && cat.spot.x <= r.maxX + SEAT_PAD
+      && cat.spot.z >= r.minZ - SEAT_PAD && cat.spot.z <= r.maxZ + SEAT_PAD;
+    if (before.some(on) || after.some(on)) cat.hideAt(cat.spot);
+  }
+}
+
+// Only what differs from the default town, versioned for migration.
 function currentLayout() {
-  const layout = {};
-  if (tiles.size) layout['#tiles'] = Object.fromEntries(tiles);
+  const layout = { '#v': 2 };
+  const current = Object.fromEntries(tiles);
+  if (JSON.stringify(sortedTiles(current)) !== JSON.stringify(sortedTiles(defaultTilesObj(LEVEL)))) layout['#tiles'] = current;
   if (JSON.stringify(zebras) !== JSON.stringify(DEFAULT_ZEBRAS)) layout['#zebras'] = zebras;
   for (const item of editables.values()) {
     const s = stateOf(item);
@@ -2671,13 +3299,13 @@ function currentLayout() {
 }
 
 function saveLayout() {
-  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(currentLayout())); } catch { /* storage unavailable */ }
+  try { localStorage.setItem(GAME_KEY, JSON.stringify({ level: LEVEL.id, layout: currentLayout() })); } catch { /* storage unavailable */ }
 }
 
 async function applyLayout() {
-  let layout = {};
-  try { layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); } catch { /* storage unavailable */ }
+  const layout = migrateLayout(game.layout ?? {});
   for (const [id, s] of Object.entries(layout)) {
+    if (id[0] === '#') continue;
     const item = editables.get(id) ?? (s.add ? await buildAdded(id, s.add) : null);
     if (item) applyState(item, s);
   }
@@ -2689,10 +3317,12 @@ async function applyLayout() {
 // Every change goes through here so it can be undone. An undo step is a
 // list of [item, state before], so loading a whole layout undoes in one go.
 function change(item, next) {
+  const before = footprintOf(item);
   undos.push([[item, stateOf(item)]]);
   applyState(item, next);
   saveLayout();
   settleTown();
+  reseatCats(before, footprintOf(item));
   select(item.removed ? null : item);
 }
 
@@ -2702,31 +3332,39 @@ function undo() {
   if (!last) return;
   if (last.tiles) setTiles(Object.fromEntries(last.tiles));
   if (last.zebras) setZebras(last.zebras);
+  const moved = last.map(([item]) => [item, footprintOf(item)]);
   for (const [item, state] of last) applyState(item, state);
   saveLayout();
   settleTown();
+  for (const [item, before] of moved) reseatCats(before, footprintOf(item));
   select(last.length === 1 && !last[0][0].removed ? last[0][0] : null);
 }
 
 // Replace the whole layout: everything not mentioned goes back to its default place.
+// Unversioned layouts are migrated in memory; the game key is only written at
+// the end, so a failed import never corrupts the current progress.
 async function loadLayout(layout) {
+  layout = migrateLayout(layout ?? {});
   cancelPlacing();
   // Build what the layout adds first, hidden, so undo hides it again.
   for (const [id, s] of Object.entries(layout)) {
-    if (!s.add || editables.has(id)) continue;
+    if (id[0] === '#' || !s.add || editables.has(id)) continue;
     const item = await buildAdded(id, s.add);
     applyState(item, { ...stateOf(item), removed: true });
   }
   const step = Object.assign([], { tiles: new Map(tiles), zebras: zebras.map(zb => ({ ...zb })) });
   setTiles(layout['#tiles']);
   setZebras(layout['#zebras'] ?? DEFAULT_ZEBRAS);
+  const pairs = [];
   for (const item of editables.values()) {
     step.push([item, stateOf(item)]);
+    pairs.push([item, footprintOf(item)]);
     applyState(item, layout[item.id] ?? (item.add ? { ...stateOf(item), removed: true } : { ...item.base, removed: false }));
   }
   undos.push(step);
   saveLayout();
   settleTown();
+  for (const [item, before] of pairs) reseatCats(before, footprintOf(item));
   select(null);
 }
 
@@ -2931,6 +3569,7 @@ function putDown() {
   undos.push([[item, { ...stateOf(item), removed: true }]]);
   saveLayout();
   settleTown();
+  reseatCats([], footprintOf(item));
   select(item);
 }
 
@@ -3006,20 +3645,47 @@ renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preven
 
 // ---------- paving ----------
 
-// Roads and pavements painted on a grid of road-wide cells lined up with the
+// ---------- paving ----------
+
+// All roads live on one integer grid of road-wide cells lined up with the
 // main street. A road cell picks the Kenney piece that joins its neighbours,
-// the old streets included, and a road crossing a street's pavement cuts it.
-// Cells inside a street can't be painted; the back street sits half a cell
-// off the grid, so the cells beside it overlap it and stop at its edge.
-// A street can be made longer, a column at a time, past either end.
-const CELL = ROAD_HALF * 2;
-const STREET_COLS = 12; // the streets run over columns −12…12, to x = ±20
-const MAX_COL = 18; // and can be made longer up to here, inside the pavements
-const tiles = new Map(); // "i,j" → 'road' | 'walk'; a street's extra columns "s<k>,<i>" → 'road'
+// and every side with no road gets an automatic sidewalk with a curb.
+// (CELL is defined with the other dimensions at the top of this file.)
+const tiles = new Map(); // "i,j" → 'road' | 'walk'
 const tileGroup = new THREE.Group();
 const kerbs = new THREE.Group();
 scene.add(tileGroup, kerbs);
-const cellKey = (i, j) => `${i},${j}`;
+
+// One unit box shared by all instanced paving. A repaint only refills
+// instance matrices, so the geometry count stays flat; only the
+// InstancedMeshes are disposed, never this geometry or the road kit's.
+const paveBox = new THREE.BoxGeometry(1, 1, 1);
+const paveDummy = new THREE.Object3D();
+const paveCell = new THREE.Matrix4();
+const paveMesh = new THREE.Matrix4();
+const paveScale = new THREE.Vector3(CELL, CELL, CELL);
+
+// [x, y, z, w, h, d] boxes as one InstancedMesh sharing paveBox.
+function paveBoxes(list, mat, parent) {
+  if (!list.length) return;
+  const m = new THREE.InstancedMesh(paveBox, mat, list.length);
+  list.forEach(([x, y, z, w, h, d], k) => {
+    paveDummy.position.set(x, y, z);
+    paveDummy.scale.set(w, h, d);
+    paveDummy.rotation.set(0, 0, 0);
+    paveDummy.updateMatrix();
+    m.setMatrixAt(k, paveDummy.matrix);
+  });
+  m.receiveShadow = true;
+  m.computeBoundingSphere();
+  parent.add(m);
+}
+
+// Drop a repaint's InstancedMeshes (their instance buffers) but no geometry.
+function clearPaving(group) {
+  for (const c of group.children) if (c.isInstancedMesh) c.dispose();
+  group.clear();
+}
 const NORTH = 1;
 const EAST = 2;
 const SOUTH = 4;
@@ -3033,42 +3699,21 @@ const pieceFor = new Map(); // sides → [piece, quarter turns]
 for (const [piece, open] of PIECES) {
   for (let k = 0, m = open; k < 4; k++, m = quarter(m)) if (!pieceFor.has(m)) pieceFor.set(m, [piece, k]);
 }
-const streetGap = z => Math.min(...STREETS.map(s => Math.abs(z - s)));
-const paveable = j => streetGap(j * CELL) > ROAD_HALF - 1e-6;
-const halfCell = j => streetGap(j * CELL) < CELL - 1e-6;
-// The painted grid cells as [i, j, kind], leaving out the street extensions.
-const gridCells = () => [...tiles].filter(([key]) => key[0] !== 's').map(([key, kind]) => [...key.split(',').map(Number), kind]);
+// The painted grid cells as [i, j, kind].
+const gridCells = () => [...tiles].map(([key, kind]) => [...key.split(',').map(Number), kind]);
 
-// The columns street k runs over, its extensions included.
-function streetSpan(k) {
-  let lo = -STREET_COLS;
-  let hi = STREET_COLS;
-  while (tiles.has(`s${k},${hi + 1}`)) hi++;
-  while (tiles.has(`s${k},${lo - 1}`)) lo--;
-  return [lo, hi];
-}
-
-// Does a street in column i lie on or across this line of z?
-const streetAt = (z, i) => STREETS.some((s, k) => {
-  const [lo, hi] = streetSpan(k);
-  return Math.abs(z - s) <= ROAD_HALF + 1e-6 && i >= lo && i <= hi;
-});
+const inBounds = (i, j) => {
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  return i >= iMin && i <= iMax && j >= jMin && j <= jMax;
+};
 
 function roadSides(i, j) {
   const road = (a, b) => tiles.get(cellKey(a, b)) === 'road';
-  const z = j * CELL;
-  return (road(i, j - 1) || streetAt(z - ROAD_HALF, i) ? NORTH : 0) | (road(i + 1, j) ? EAST : 0)
-    | (road(i, j + 1) || streetAt(z + ROAD_HALF, i) ? SOUTH : 0) | (road(i - 1, j) ? WEST : 0);
-}
-
-function roadPiece(gltf) {
-  const obj = gltf.scene.clone(true);
-  obj.traverse(o => {
-    if (!o.isMesh) return;
-    o.material = kit.roadMat;
-    o.receiveShadow = true;
-  });
-  return obj;
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  // Sides with a neighbouring road stay open; a road reaching the bounds
+  // edge opens outward, drawn as running straight through.
+  return (road(i, j - 1) || j === jMin ? NORTH : 0) | (road(i + 1, j) || i === iMax ? EAST : 0)
+    | (road(i, j + 1) || j === jMax ? SOUTH : 0) | (road(i - 1, j) || i === iMin ? WEST : 0);
 }
 
 let paveJob = 0;
@@ -3076,98 +3721,68 @@ async function drawTiles() {
   const job = ++paveJob;
   const gltfs = Object.fromEntries(await Promise.all(PIECES.map(async ([p]) => [p, await model('roads', p)])));
   if (job !== paveJob) return;
-  tileGroup.clear();
+  clearPaving(tileGroup);
+  const walks = [];
+  const cellsByPiece = new Map();
   for (const [i, j, kind] of gridCells()) {
     const x = i * CELL;
     const z = j * CELL;
     if (kind === 'walk') {
-      box(CELL, 0.05, CELL, kit.pavement, x, 0.025, z, false, tileGroup);
+      walks.push([x, 0.025, z, CELL, 0.05, CELL]);
       continue;
     }
-    let obj;
-    if (halfCell(j)) {
-      // Only the part outside the street: a straight stub running into it.
-      const s = STREETS.reduce((a, b) => (Math.abs(z - b) < Math.abs(z - a) ? b : a));
-      const near = s + Math.sign(z - s) * ROAD_HALF;
-      const far = z + Math.sign(z - s) * ROAD_HALF;
-      obj = roadPiece(gltfs['road-straight']);
-      obj.position.set(x, 0, (near + far) / 2);
-      obj.rotation.y = Math.PI / 2;
-      obj.scale.set(Math.abs(far - near), 1, CELL);
-    } else {
-      const [piece, k] = pieceFor.get(roadSides(i, j));
-      obj = roadPiece(gltfs[piece]);
-      obj.position.set(x, 0, z);
-      obj.rotation.y = k * Math.PI / 2;
-      obj.scale.setScalar(CELL);
-    }
-    tileGroup.add(obj);
+    const [piece, k] = pieceFor.get(roadSides(i, j));
+    if (!cellsByPiece.has(piece)) cellsByPiece.set(piece, []);
+    cellsByPiece.get(piece).push([x, z, k]);
   }
-
-  // The streets: straight between junctions, and a T (or a crossing, with
-  // roads on both sides) where painted roads join them.
-  STREETS.forEach((street, k) => {
-    const [lo, hi] = streetSpan(k);
-    const joins = new Map(); // cell column → sides with a road
-    for (const [i, j, kind] of gridCells()) {
-      if (kind !== 'road' || i < lo || i > hi) continue;
-      const z = j * CELL;
-      if (z < street && Math.abs(z + ROAD_HALF - street) <= ROAD_HALF + 1e-6) joins.set(i, (joins.get(i) ?? 0) | NORTH);
-      if (z > street && Math.abs(z - ROAD_HALF - street) <= ROAD_HALF + 1e-6) joins.set(i, (joins.get(i) ?? 0) | SOUTH);
+  paveBoxes(walks, kit.pavement, tileGroup);
+  for (const [piece, cells] of cellsByPiece) {
+    // Each mesh inside the piece's glTF, drawn once per road cell using it:
+    // the cell transform (position, quarter turn, CELL scale) times the
+    // mesh's own transform inside the glTF.
+    gltfs[piece].scene.updateMatrixWorld(true);
+    const parts = [];
+    gltfs[piece].scene.traverse(o => {
+      if (o.isMesh) parts.push({ geo: o.geometry, mat: o.matrixWorld.clone() });
+    });
+    for (const { geo, mat } of parts) {
+      const m = new THREE.InstancedMesh(geo, kit.roadMat, cells.length);
+      cells.forEach(([x, z, k], n) => {
+        paveCell.makeRotationY(k * Math.PI / 2).scale(paveScale).setPosition(x, 0, z);
+        m.setMatrixAt(n, paveMesh.multiplyMatrices(paveCell, mat));
+      });
+      m.receiveShadow = true;
+      m.computeBoundingSphere();
+      tileGroup.add(m);
     }
-    const straight = (a, b) => {
-      const obj = roadPiece(gltfs['road-straight']);
-      obj.position.set((a + b) / 2, 0, street);
-      obj.scale.set(b - a, 1, CELL);
-      tileGroup.add(obj);
-    };
-    const end = hi * CELL + ROAD_HALF;
-    let from = lo * CELL - ROAD_HALF;
-    for (const i of [...joins.keys()].sort((a, b) => a - b)) {
-      const a = i * CELL - ROAD_HALF;
-      if (a > from) straight(from, a);
-      const [piece, k] = pieceFor.get(EAST | WEST | joins.get(i));
-      const obj = roadPiece(gltfs[piece]);
-      obj.position.set(i * CELL, 0, street);
-      obj.rotation.y = k * Math.PI / 2;
-      obj.scale.setScalar(CELL);
-      tileGroup.add(obj);
-      from = a + CELL;
-    }
-    if (from < end) straight(from, end);
-  });
+  }
   buildRoads();
 }
 
-// The streets' pavements and curbs, with a gap wherever a road crosses.
+// Sidewalks draw from the same rules as the walk grid (see sidewalkRects):
+// each entry is a strip (side set, slab plus curb) or a corner fill (side
+// 0, slab only). Walk tiles underneath keep their own slabs.
 function paveSidewalks() {
-  kerbs.clear();
-  for (const street of STREETS) {
-    for (const side of [-1, 1]) {
-      const inner = street + side * ROAD_HALF;
-      const outer = street + side * FRONTAGE;
-      const gaps = gridCells().filter(([, , kind]) => kind === 'road')
-        .filter(([, j]) => Math.min(inner, outer) < j * CELL + ROAD_HALF && Math.max(inner, outer) > j * CELL - ROAD_HALF)
-        .map(([i]) => [i * CELL - ROAD_HALF, i * CELL + ROAD_HALF]).sort((a, b) => a[0] - b[0]);
-      let from = -30;
-      for (const [a, b] of [...gaps, [30, 30]]) {
-        if (a > from) {
-          box(a - from, 0.05, SIDEWALK, kit.pavement, (a + from) / 2, 0.025, (inner + outer) / 2, false, kerbs);
-          box(a - from, 0.06, 0.06, kit.curb, (a + from) / 2, 0.03, street + side * (ROAD_HALF + 0.03), false, kerbs);
-        }
-        from = Math.max(from, b);
-      }
-    }
+  clearPaving(kerbs);
+  const R = CELL / 2;
+  const slabs = [];
+  const curbs = [];
+  for (const { r, side, x, z } of sidewalkRects()) {
+    const [x0, z0, x1, z1] = r;
+    slabs.push([(x0 + x1) / 2, 0.024, (z0 + z1) / 2, x1 - x0, 0.05, z1 - z0]);
+    if (!side) continue;
+    if (side === NORTH) curbs.push([x, 0.03, z - R - 0.03, CELL, 0.06, 0.06]);
+    else if (side === SOUTH) curbs.push([x, 0.03, z + R + 0.03, CELL, 0.06, 0.06]);
+    else if (side === EAST) curbs.push([x + R + 0.03, 0.03, z, 0.06, 0.06, CELL]);
+    else curbs.push([x - R - 0.03, 0.03, z, 0.06, 0.06, CELL]);
   }
+  paveBoxes(slabs, kit.pavement, kerbs);
+  paveBoxes(curbs, kit.curb, kerbs);
 }
 
-// Zebra crossings: across a street, or across a straight painted road (`ns`:
-// a road running north–south), `w` wide along the road. The lanes and the
-// hotel have theirs to begin with.
-const DEFAULT_ZEBRAS = [
-  ...ALLEYS.flatMap(x => STREETS.map(z => ({ x, z, w: ALLEY_HALF * 1.6, ns: false }))),
-  { x: 0, z: STREETS[0], w: 0.6, ns: false },
-];
+// Zebra crossings: across a road running east–west, or across a straight
+// north–south road (`ns`), `w` wide along the road.
+const DEFAULT_ZEBRAS = LEVEL.zebras.map(zb => ({ ...zb }));
 const zebras = DEFAULT_ZEBRAS.map(zb => ({ ...zb }));
 const zebraMat = std(0xe8e2cf, { roughness: 0.6 });
 const zebraGroup = new THREE.Group();
@@ -3195,23 +3810,25 @@ function onZebra(zb, p) {
   return Math.abs(along) < zb.w / 2 + 0.15 && Math.abs(across) < ROAD_HALF + 0.1;
 }
 
-// Where a crossing painted at this cell would go: across a street clear of
-// its junctions, or across a straight road cell; nowhere else.
+// Where a crossing painted at this cell would go: across a straight road
+// cell; nowhere else.
 function zebraAt(at, i, j) {
-  const street = STREETS.findIndex(s => Math.abs(at.z - s) <= ROAD_HALF);
-  const node = roads.get(street >= 0 ? `s${street},${i}` : cellKey(i, j));
-  if (!node || isJunction(node) || (street < 0 && halfCell(j))) return null;
+  const node = roads.get(cellKey(i, j));
+  if (!node || isJunction(node)) return null;
   const sides = [...node.links.keys()];
-  if (sides[0] !== opposite(sides[1])) return null;
-  const zb = { x: node.x, z: node.z, w: ALLEY_HALF * 1.6, ns: sides.includes(NORTH) };
+  if (sides.length !== 2 || sides[0] !== opposite(sides[1])) return null;
+  const zb = { x: node.x, z: node.z, w: 0.72, ns: sides.includes(NORTH) };
   return zebras.some(o => Math.hypot(o.x - zb.x, o.z - zb.z) < CELL - 1e-6) ? null : zb;
 }
 
 const inCell = (zb, i, j) => Math.abs(zb.x - i * CELL) <= CELL / 2 + 1e-6 && Math.abs(zb.z - j * CELL) <= CELL / 2 + 1e-6;
 
-function setTiles(cells = {}) {
+// Without tiles the level defaults apply; a layout owning #tiles (even an
+// empty one, an intentionally cleared map) replaces them entirely.
+function setTiles(cells) {
   tiles.clear();
-  for (const [key, kind] of Object.entries(cells)) tiles.set(key, kind);
+  const src = cells === undefined ? defaultTilesObj(LEVEL) : cells;
+  for (const [key, kind] of Object.entries(src)) tiles.set(key, kind);
   drawTiles();
   paveSidewalks();
 }
@@ -3236,13 +3853,31 @@ function setBrush(b) {
   if (!$('add-panel').hidden) renderAddPanel();
 }
 
+// A drag paints many cells per second; coalesce a stroke's repaints so at
+// most one runs per frame.
+let paveQueued = false;
+function queuePave() {
+  if (paveQueued) return;
+  paveQueued = true;
+  requestAnimationFrame(() => {
+    paveQueued = false;
+    drawTiles();
+    paveSidewalks();
+  });
+}
+
 function paintAt(at) {
   const i = Math.round(at.x / CELL);
   const j = Math.round(at.z / CELL);
-  const k = STREETS.findIndex(st => Math.abs(at.z - st) <= ROAD_HALF);
-  if (k >= 0 && brush !== 'zebra') return paintStreet(k, i);
+  // The brush stops at the map edge.
+  if (!inBounds(i, j)) {
+    brushMark.position.set(i * CELL, 0.07, j * CELL);
+    brushMark.material.color.setHex(0xff5a5a);
+    brushMark.visible = true;
+    return;
+  }
   const zebra = brush === 'zebra' ? zebraAt(at, i, j) : null;
-  const ok = brush === 'erase' || (brush === 'zebra' ? !!zebra : paveable(j));
+  const ok = brush === 'erase' || (brush === 'zebra' ? !!zebra : true);
   brushMark.position.set(zebra ? zebra.x : i * CELL, 0.07, zebra ? zebra.z : j * CELL);
   brushMark.material.color.setHex(ok ? 0x3ec8ff : 0xff5a5a);
   brushMark.visible = true;
@@ -3257,32 +3892,7 @@ function paintAt(at) {
   if (tiles.get(key) === want) return;
   if (want) tiles.set(key, want);
   else tiles.delete(key);
-  drawTiles();
-  paveSidewalks();
-}
-
-// On a street the road brush adds a column just past its end, and the
-// erase brush takes it back to the column before (and any crossings there).
-function paintStreet(k, i) {
-  const [lo, hi] = streetSpan(k);
-  const out = i > hi ? i - hi : lo - i; // columns past the end
-  const extra = Math.abs(i) > STREET_COLS && i >= lo && i <= hi;
-  const ok = brush === 'road' ? out <= 1 && Math.abs(i) <= MAX_COL : brush === 'erase';
-  brushMark.position.set(i * CELL, 0.07, STREETS[k]);
-  brushMark.material.color.setHex(ok ? 0x3ec8ff : 0xff5a5a);
-  brushMark.visible = true;
-  if (!stroke || !ok) return;
-  const near = zb => !zb.ns && zb.z === STREETS[k] && Math.abs(zb.x - i * CELL) <= CELL / 2 + 1e-6;
-  if (brush === 'erase' && zebras.some(near)) setZebras(zebras.filter(zb => !near(zb)));
-  if (brush === 'road' && out === 1) {
-    tiles.set(`s${k},${i}`, 'road');
-  } else if (brush === 'erase' && extra) {
-    for (let c = i; c >= lo && c <= hi; c += Math.sign(i)) tiles.delete(`s${k},${c}`);
-  } else {
-    return;
-  }
-  drawTiles();
-  paveSidewalks();
+  queuePave();
 }
 
 function endStroke() {
@@ -3293,7 +3903,7 @@ function endStroke() {
   if (sameTiles && sameZebras) return;
   undos.push(Object.assign([], { tiles: before.tiles, zebras: JSON.parse(before.zebras) }));
   saveLayout();
-  if (!sameZebras) settleTown();
+  settleTown();
 }
 
 // Three save slots in this browser, and layouts as .json files to keep or share.
@@ -3351,8 +3961,8 @@ $('layout-file').addEventListener('change', async e => {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (data.app !== LAYOUT_FILE.app || data.kind !== LAYOUT_FILE.kind || typeof data.layout !== 'object') throw new Error();
-    loadLayout(data.layout);
+    if (data.app !== LAYOUT_FILE.app || data.kind !== LAYOUT_FILE.kind || !data.layout || typeof data.layout !== 'object' || Array.isArray(data.layout)) throw new Error();
+    await loadLayout(data.layout);
   } catch {
     alert('這不是小鎮的佈局檔。');
   }
@@ -3362,7 +3972,12 @@ $('edit').addEventListener('click', e => { setEditing(!editing); e.currentTarget
 $('edit-undo').addEventListener('click', undo);
 $('edit-reset').addEventListener('click', () => {
   if (!confirm('還原成預設的小鎮？所有搬動和刪除都會清除。')) return;
-  try { localStorage.removeItem(LAYOUT_KEY); } catch { /* storage unavailable */ }
+  try {
+    localStorage.setItem(GAME_KEY, JSON.stringify({ level: LEVEL.id, layout: { '#v': 2 } }));
+  } catch {
+    alert('無法還原：瀏覽器儲存空間不足或無法使用。');
+    return;
+  }
   location.reload();
 });
 
@@ -3371,14 +3986,14 @@ $('edit-reset').addEventListener('click', () => {
 const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
-  time = (time + dt * speed / 3600) % 24;
+  setTime(time + dt * speed / 3600);
   applyTime(time);
   const a = Math.min(1, activity(time) + crowdBoost);
   for (const w of walkers) w.update(dt, a);
   for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
   updateTraffic(dt, a);
   updateCats(dt);
-  wishes.update(dt);
+  if (wishes) wishes.update(dt);
   updatePlayer(dt);
   updateTalk(dt);
   controls.update();
@@ -3387,9 +4002,12 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
-await Promise.all([buildTown(), addPeople(), addTraffic()]);
-addCats();
+// The layout (tiles, zebras, editables) lands before any people plan their
+// walks, so the first plans already see the real walk grid.
+await buildTown();
 await applyLayout();
+await Promise.all([addPeople(), addTraffic()]);
+addCats();
 addWishes();
 await addWardrobe();
 $('loading').classList.add('done');

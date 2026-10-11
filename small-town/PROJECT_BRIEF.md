@@ -14,18 +14,19 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 - 居民依作息上下班、回家；路人、散步者、公園長椅、公車與乘客。
 - 散步模式（P）：WASD 走、Shift 跑、空白鍵跳、E 互動；換裝（C）與取名。
 - 找貓（8 隻）與噴水池許願（10 個祝福）。
-- 編輯模式（B）：搬動／旋轉／刪除建築與路燈、新增住家／別墅／商店／樹／路燈、鋪馬路／人行道／斑馬線、延長兩條街、undo、3 格存檔、匯出／匯入 json。
+- 編輯模式（B）：搬動／旋轉／刪除建築與路燈、新增住家／別墅／商店／樹／路燈、在固定地圖範圍內鋪馬路／人行道／斑馬線、undo、3 格存檔、匯出／匯入 json。
+- 網格道路與自動人行道、通用行人找路、小鎮關卡資料化；找貓／祝福／投幣紀錄依關卡保存。
 - 車流走路網：靠右、路口獨佔、死路迴轉、斑馬線停讓；公車大街西行停站。
 
 ## 當前狀態與下一步
 
-- **P1（多關卡）已拍板、未開工**。下一步：P1-A1。
+- **P1-A（A1＋A2）已完成並由指揮者驗證**，尚未 commit/push。下一步：P1-B。
 - 鐵道素材：Kenney Train Kit 1.1（CC0，GLB）已下載在本機暫存區，**尚未放進 repo**；P1-C 開工時放入 `assets/train-kit/`。
 
 | P1 Subphase | 狀態 |
 |---|---|
-| P1-A1 — Grid Roads & Traffic | 未開工 |
-| P1-A2 — Pedestrian Paths & Town Level Data | 未開工 |
+| P1-A1 — Grid Roads & Traffic | 已完成（已驗證、未提交） |
+| P1-A2 — Pedestrian Paths & Town Level Data | 已完成（已驗證、未提交） |
 | P1-B — New Town Menu & Save Slots | 未開工 |
 | P1-C — Railway & Trains | 未開工 |
 | P1-D — Station Level & Closeout | 未開工 |
@@ -61,6 +62,7 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 
 - 新蓋的建築不擋車。
 - 祝福的效果重新整理後不保留；祝福收集紀錄與投幣次數會保存。
+- A2 調整初始化順序後，外圍 9 棵隨機樹的預設位置與舊基準不同；不影響功能或存檔，列為可修可不修。
 - 部署時本檔與 `docs/` 也會一起被放上網站（無害）。
 
 ## 文件索引
@@ -70,5 +72,7 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 | `docs/P1/實作規格.md` | P1 各 Subphase 完成後什麼必須成立 |
 | `docs/P1/開發設計方針.md` | 資料格式、模組、儲存 key、接線 |
 | `docs/P1/測試指南.md` | 各 Subphase 的驗收步驟與證據 |
+| `docs/P1/P1-A1實作紀錄.md` | 網格道路與車流的交付、修正及驗證 |
+| `docs/P1/P1-A2實作紀錄.md` | 行人找路與關卡資料化的交付、修正及驗證 |
 | `docs/others/conductor-handbook.md` | 指揮外部 worker（agy／ChatGPT／Muse）實作的流程、驗證 gate、審核清單 |
 | `docs/others/local-tools.md` | 本機起站、外部 reviewer／worker 的啟動指令 |
