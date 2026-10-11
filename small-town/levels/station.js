@@ -123,7 +123,7 @@ for (let i = -30; i <= 29; i++) railCells.push([i, 4]);
 export default {
   id: 'station',
   name: '火車站',
-  blurb: '一條鐵道穿過小鎮，車站前就是旅館與商店街。',
+  blurb: '複線鐵道穿過小鎮，車站前就是旅館與商店街。',
   preview: 'levels/station.jpg',
   bounds: [-30, 29, -30, 29],
   roads: [
@@ -168,6 +168,7 @@ export default {
   rail: {
     cells: railCells,
     station: { cell: [0, 4], side: 'north' },
+    doubleTrack: { laneOffset: 0.4 },
     every: [90, 240],
     train: ['train-electric-square-a', 'train-electric-square-b', 'train-electric-square-b', 'train-electric-square-c'],
     // 每第 4 班是雙層快車：1.5 倍速，不停站。

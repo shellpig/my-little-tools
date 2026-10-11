@@ -175,7 +175,7 @@ export function projectOnto(line, x, z) {
 // rail data is unusable (then the town runs exactly as without rail).
 export async function buildRail(ctx) {
   const def = ctx.LEVEL.rail;
-  const line = def && buildRailLine(def.cells, ctx.CELL);
+  let line = def && buildRailLine(def.cells, ctx.CELL);
   if (!line) return null;
   const stationS = def.station ? line.centers.get(`${def.station.cell[0]},${def.station.cell[1]}`) ?? null : null;
   const names = Array.isArray(def.train) && def.train.length ? def.train
@@ -184,48 +184,85 @@ export async function buildRail(ctx) {
   // Optional express: every nth departure runs this set instead, faster,
   // straight through the station.
   const express = def.express && Array.isArray(def.express.train) && def.express.train.length ? def.express : null;
+  const requestedOffset = Number(def.doubleTrack && def.doubleTrack.laneOffset);
+  // Double track is intentionally limited to a straight horizontal corridor.
+  // Other levels keep the original single-line route and geometry.
+  const dualTrack = Number.isFinite(requestedOffset) && requestedOffset > 0
+    && def.cells.every(([, j]) => j === def.cells[0][1]);
+  const laneSpecs = dualTrack
+    ? [
+      { id: 'eastbound', direction: 1, zOffset: requestedOffset, cells: def.cells },
+      { id: 'westbound', direction: -1, zOffset: -requestedOffset, cells: [...def.cells].reverse() },
+    ]
+    : [{ id: 'main', direction: 1, zOffset: 0, cells: def.cells }];
+  const shiftLine = (route, zOffset) => {
+    for (const seg of route.segs) {
+      if (seg.kind === 'line') {
+        seg.az += zOffset;
+        seg.bz += zOffset;
+      } else seg.cz += zOffset;
+    }
+    return route;
+  };
+  const directions = laneSpecs.map(spec => {
+    const route = buildRailLine(spec.cells, ctx.CELL);
+    if (!route) return null;
+    const stationAt = def.station
+      ? route.centers.get(def.station.cell[0] + ',' + def.station.cell[1]) ?? null
+      : null;
+    return {
+      ...spec, line: shiftLine(route, spec.zOffset), stationS: stationAt,
+      local: null, fast: null, train: null, departures: 0, lastGap: null,
+      nextIn: FIRST_TRAIN[0] + Math.random() * (FIRST_TRAIN[1] - FIRST_TRAIN[0]),
+    };
+  });
+  if (directions.some(d => !d)) return null;
+  line = directions[0].line;
 
   // Track visuals: one straight or corner piece per cell, placed so the
   // model's own arc meets the centre line's arc. The EXT approaches past
   // each map edge (where trains enter/leave inside the fog) get minimal
   // straight pieces so a visible train always has rails under it.
   const cells = def.cells;
-  for (let k = 0; k < cells.length; k++) {
-    const [i, j] = cells[k];
-    const x = i * ctx.CELL;
-    const z = j * ctx.CELL;
-    const prev = cells[Math.max(0, k - 1)];
-    const next = cells[Math.min(cells.length - 1, k + 1)];
-    const hIn = { x: i - prev[0], z: j - prev[1] };
-    const hOut = { x: next[0] - i, z: next[1] - j };
-    if (k === 0) Object.assign(hIn, hOut);
-    if (k === cells.length - 1) Object.assign(hOut, hIn);
-    const pin = { x: x - hIn.x * ctx.CELL / 2, z: z - hIn.z * ctx.CELL / 2 };
-    if (hIn.x === hOut.x && hIn.z === hOut.z) {
-      const obj = await ctx.place('train-kit', 'railroad-straight', {});
-      obj.position.set(pin.x, RAIL_Y, pin.z);
-      obj.rotation.y = Math.atan2(hIn.x, hIn.z);
-      obj.scale.setScalar(RAIL_SCALE);
-    } else {
-      const cross = hIn.z * hOut.x - hIn.x * hOut.z;
-      const rightTurn = cross < 0;
-      const local = rightTurn ? { p: { x: 0, z: 0 }, h: { x: 0, z: 1 } } : { p: { x: -2, z: 2 }, h: { x: 1, z: 0 } };
-      const th = Math.atan2(hIn.x, hIn.z) - Math.atan2(local.h.x, local.h.z);
-      const c = Math.cos(th);
-      const s = Math.sin(th);
-      const obj = await ctx.place('train-kit', 'railroad-corner-small', {});
-      obj.rotation.y = th;
-      obj.scale.setScalar(RAIL_SCALE);
-      obj.position.set(
-        pin.x - RAIL_SCALE * (local.p.x * c + local.p.z * s), RAIL_Y,
-        pin.z - RAIL_SCALE * (-local.p.x * s + local.p.z * c));
+  for (const lane of directions) {
+    const routeCells = lane.cells;
+    for (let k = 0; k < routeCells.length; k++) {
+      const [i, j] = routeCells[k];
+      const x = i * ctx.CELL;
+      const z = j * ctx.CELL + lane.zOffset;
+      const prev = routeCells[Math.max(0, k - 1)];
+      const next = routeCells[Math.min(routeCells.length - 1, k + 1)];
+      const hIn = { x: i - prev[0], z: j - prev[1] };
+      const hOut = { x: next[0] - i, z: next[1] - j };
+      if (k === 0) Object.assign(hIn, hOut);
+      if (k === routeCells.length - 1) Object.assign(hOut, hIn);
+      const pin = { x: x - hIn.x * ctx.CELL / 2, z: z - hIn.z * ctx.CELL / 2 };
+      if (hIn.x === hOut.x && hIn.z === hOut.z) {
+        const obj = await ctx.place('train-kit', 'railroad-straight', {});
+        obj.position.set(pin.x, RAIL_Y, pin.z);
+        obj.rotation.y = Math.atan2(hIn.x, hIn.z);
+        obj.scale.setScalar(RAIL_SCALE);
+      } else {
+        const cross = hIn.z * hOut.x - hIn.x * hOut.z;
+        const rightTurn = cross < 0;
+        const local = rightTurn ? { p: { x: 0, z: 0 }, h: { x: 0, z: 1 } } : { p: { x: -2, z: 2 }, h: { x: 1, z: 0 } };
+        const th = Math.atan2(hIn.x, hIn.z) - Math.atan2(local.h.x, local.h.z);
+        const c = Math.cos(th);
+        const s = Math.sin(th);
+        const obj = await ctx.place('train-kit', 'railroad-corner-small', {});
+        obj.rotation.y = th;
+        obj.scale.setScalar(RAIL_SCALE);
+        obj.position.set(
+          pin.x - RAIL_SCALE * (local.p.x * c + local.p.z * s), RAIL_Y,
+          pin.z - RAIL_SCALE * (-local.p.x * s + local.p.z * c));
+      }
     }
   }
   // Each train set: one head plus cars, built once and reused every run
   // so nothing is created per frame. Unit extents come from the loaded
   // models (front/rear allow an off-centre origin), keeping the set gap
   // between bodies through bends.
-  async function buildSet(setNames, cruise, stops) {
+  async function buildSet(setNames, cruise, stops, laneStationS) {
     const units = [];
     for (const n of setNames) {
       const gltf = await ctx.model('train-kit', n);
@@ -252,28 +289,34 @@ export async function buildRail(ctx) {
     const trainLen = units[0].front + offsets[offsets.length - 1] - units[units.length - 1].rear;
     // Where the lead unit's centre stops so the whole train sits centred on
     // the station cell, alongside the platform.
-    const stopS = stationS === null || !stops ? null : stationS + trainLen / 2 - units[0].front;
+    const stopS = laneStationS === null || !stops ? null : laneStationS + trainLen / 2 - units[0].front;
     return { units, offsets, trainLen, stopS, cruise };
   }
-  const local = await buildSet(names, TRAIN_CRUISE, true);
-  const fast = express ? await buildSet(express.train, TRAIN_CRUISE * (express.speed || 1), false) : null;
-  const trainLen = Math.max(local.trainLen, fast ? fast.trainLen : 0);
+  let maxTrainLen = 0;
+  for (const lane of directions) {
+    lane.local = await buildSet(names, TRAIN_CRUISE, true, lane.stationS);
+    lane.fast = express ? await buildSet(express.train, TRAIN_CRUISE * (express.speed || 1), false, lane.stationS) : null;
+    maxTrainLen = Math.max(maxTrainLen, lane.local.trainLen, lane.fast ? lane.fast.trainLen : 0);
+  }
 
   // Keep the whole visible consist on track during its approach and exit.
-  const firstMove = { x: cells[1][0] - cells[0][0], z: cells[1][1] - cells[0][1] };
-  const lastMove = { x: cells[cells.length - 1][0] - cells[cells.length - 2][0], z: cells[cells.length - 1][1] - cells[cells.length - 2][1] };
-  const first = { x: cells[0][0] * ctx.CELL, z: cells[0][1] * ctx.CELL };
-  const last = { x: cells[cells.length - 1][0] * ctx.CELL, z: cells[cells.length - 1][1] * ctx.CELL };
-  const need = Math.ceil((EXT + trainLen) / ctx.CELL);
-  for (let q = 0; q < need; q++) {
-    for (const [edge, mv] of [[first, firstMove], [last, lastMove]]) {
-      const dir = edge === first ? -1 : 1;
-      const cx = edge.x + mv.x * dir * (1 + q) * ctx.CELL;
-      const cz = edge.z + mv.z * dir * (1 + q) * ctx.CELL;
-      const obj = await ctx.place('train-kit', 'railroad-straight', {});
-      obj.position.set(cx - mv.x * ctx.CELL / 2, RAIL_Y, cz - mv.z * ctx.CELL / 2);
-      obj.rotation.y = Math.atan2(mv.x, mv.z);
-      obj.scale.setScalar(RAIL_SCALE);
+  for (const lane of directions) {
+    const route = lane.cells;
+    const firstMove = { x: route[1][0] - route[0][0], z: route[1][1] - route[0][1] };
+    const lastMove = { x: route[route.length - 1][0] - route[route.length - 2][0], z: route[route.length - 1][1] - route[route.length - 2][1] };
+    const first = { x: route[0][0] * ctx.CELL, z: route[0][1] * ctx.CELL + lane.zOffset };
+    const last = { x: route[route.length - 1][0] * ctx.CELL, z: route[route.length - 1][1] * ctx.CELL + lane.zOffset };
+    const need = Math.ceil((EXT + maxTrainLen) / ctx.CELL);
+    for (let q = 0; q < need; q++) {
+      for (const [edge, mv] of [[first, firstMove], [last, lastMove]]) {
+        const dir = edge === first ? -1 : 1;
+        const cx = edge.x + mv.x * dir * (1 + q) * ctx.CELL;
+        const cz = edge.z + mv.z * dir * (1 + q) * ctx.CELL;
+        const obj = await ctx.place('train-kit', 'railroad-straight', {});
+        obj.position.set(cx - mv.x * ctx.CELL / 2, RAIL_Y, cz - mv.z * ctx.CELL / 2);
+        obj.rotation.y = Math.atan2(mv.x, mv.z);
+        obj.scale.setScalar(RAIL_SCALE);
+      }
     }
   }
 
@@ -293,8 +336,16 @@ export async function buildRail(ctx) {
   };
   const crossings = [];
   const rail = {
-    line, units: local.units, crossings, train: null, departures: 0, lastGap: null,
-    nextIn: FIRST_TRAIN[0] + Math.random() * (FIRST_TRAIN[1] - FIRST_TRAIN[0]),
+    line, units: directions[0].local.units, crossings,
+    directions: Object.fromEntries(directions.map(d => [d.id, d])),
+    get train() { return directions[0].train; },
+    set train(value) { directions[0].train = value; },
+    get departures() { return directions[0].departures; },
+    set departures(value) { directions[0].departures = value; },
+    get lastGap() { return directions[0].lastGap; },
+    set lastGap(value) { directions[0].lastGap = value; },
+    get nextIn() { return directions[0].nextIn; },
+    set nextIn(value) { directions[0].nextIn = value; },
     // A rail cell with a road tile on it is a crossing; painted or erased
     // roads (and undo) rebuild it through buildRoads. Barrier units sit on
     // the road approaches, posts clear of the lanes. Rebuilt from scratch
@@ -330,7 +381,8 @@ export async function buildRail(ctx) {
         if (ctx.tiles.get(key) !== 'road' || !ctx.roads.has(key)) continue;
         const x = i * ctx.CELL;
         const z = j * ctx.CELL;
-        const s = line.centers.get(key);
+        const sByDirection = Object.fromEntries(directions.map(d => [d.id, d.line.centers.get(key)]));
+        const s = sByDirection[directions[0].id];
         const road = roadOf(key, s);
         const group = new THREE.Group();
         group.position.set(x, 0, z);
@@ -356,7 +408,7 @@ export async function buildRail(ctx) {
         }
         const old = keep.get(key) ?? { closed: false, armT: 0 };
         for (const pivot of arms) pivot.rotation.z = (1 - old.armT) * 1.4;
-        crossings.push({ key, x, z, s, rx: road.x, rz: road.z, group, arms, posts: barrierPosts, closed: old.closed, armT: old.armT });
+        crossings.push({ key, x, z, s, sByDirection, rx: road.x, rz: road.z, group, arms, posts: barrierPosts, closed: old.closed, armT: old.armT });
       }
     },
     // Closed road nodes for Vehicle.drive's brake: the car stops ahead of
@@ -416,19 +468,19 @@ export async function buildRail(ctx) {
       if (!Number.isFinite(dt) || dt < 0) dt = 0;
       if (!Number.isFinite(gameDt) || gameDt < 0) gameDt = 0;
       if (!gameDt) return;
-      // Timetable in game seconds: the next run leaves after a draw from
-      // every, stretched while the town sleeps.
-      if (!this.train) {
-        this.nextIn -= gameDt;
-        if (this.nextIn <= 0) {
-          this.departures++;
-          const set = fast && this.departures % (express.every || 4) === 0 ? fast : local;
-          this.train = { set, s: 0, speed: 0, dwelled: set.stopS === null, waitT: 0 };
-          for (const u of set.units) u.obj.visible = true;
+      // Each direction owns its timetable and its own model instances.
+      for (const lane of directions) {
+        if (!lane.train) {
+          lane.nextIn -= gameDt;
+          if (lane.nextIn <= 0) {
+            lane.departures++;
+            const set = lane.fast && lane.departures % (express.every || 4) === 0 ? lane.fast : lane.local;
+            lane.train = { set, s: 0, speed: 0, dwelled: set.stopS === null, waitT: 0 };
+            for (const u of set.units) u.obj.visible = true;
+          }
         }
-      }
-      const t = this.train;
-      if (t) {
+        const t = lane.train;
+        if (!t) continue;
         const { units, offsets, trainLen, stopS } = t.set;
         const nose = t.s + units[0].front;
         let target = t.set.cruise;
@@ -437,11 +489,11 @@ export async function buildRail(ctx) {
         if (!t.dwelled && stopS !== null && t.s < stopS + 0.5) {
           target = Math.min(target, t.s <= stopS ? Math.sqrt(Math.max(stopS - t.s, 0)) : 0);
         }
-        const player = playerPos;
-        if (player) {
-          const proj = projectOnto(line, player.x, player.z);
+        if (playerPos) {
+          const proj = projectOnto(lane.line, playerPos.x, playerPos.z);
+          const blockRadius = dualTrack ? Math.max(0, requestedOffset - 0.02) : 0.5;
           const gap = proj.s - nose;
-          if (proj.d < 0.5 && gap > -0.2) {
+          if (proj.d < blockRadius && gap > -0.2) {
             const stop = Math.sqrt(Math.max(gap - 0.3, 0));
             if (gap < t.speed * t.speed / (2 * TRAIN_BRAKE) + 0.6) target = Math.min(target, stop);
           }
@@ -462,30 +514,36 @@ export async function buildRail(ctx) {
           if (ctx.onStationStop) ctx.onStationStop();
         }
         for (let k = 0; k < units.length; k++) {
-          const q = pointAt(line, t.s - offsets[k]);
+          const q = pointAt(lane.line, t.s - offsets[k]);
           units[k].obj.position.set(q.x, RAIL_TOP, q.z);
           units[k].obj.rotation.y = Math.atan2(q.tx, q.tz);
         }
         const tail = t.s - (trainLen - units[0].front);
-        if (tail > line.length) {
-          this.train = null;
+        if (tail > lane.line.length) {
+          lane.train = null;
           for (const u of units) u.obj.visible = false;
           const a = Math.max(Number.isFinite(actNow) ? actNow : 1, 0.15);
-          this.lastGap = (every[0] + Math.random() * (every[1] - every[0])) / a;
-          this.nextIn = this.lastGap;
+          lane.lastGap = (every[0] + Math.random() * (every[1] - every[0])) / a;
+          lane.nextIn = lane.lastGap;
         }
       }
-      // Gates follow the train only: shut while the nose is inside WARN or
-      // any part of the set is still over the road; the player never opens
-      // them early.
+      // A shared gate stays down for either approaching consist and rises
+      // only after every direction's tail clears the crossing.
       for (const c of crossings) {
         let shut = false;
-        if (t) {
+        for (const lane of directions) {
+          const t = lane.train;
+          if (!t) continue;
           const { units, trainLen, cruise } = t.set;
           const nose = t.s + units[0].front;
           const tail = t.s - (trainLen - units[0].front);
+          const crossingS = c.sByDirection[lane.id] ?? c.s;
           // A faster set warns from farther out, for the same lead time.
-          shut = nose > c.s - GATE_WARN * cruise / TRAIN_CRUISE && tail < c.s + ctx.CELL / 2 + 0.05;
+          if (nose > crossingS - GATE_WARN * cruise / TRAIN_CRUISE
+            && tail < crossingS + ctx.CELL / 2 + 0.05) {
+            shut = true;
+            break;
+          }
         }
         c.closed = shut;
         c.armT = THREE.MathUtils.clamp(c.armT + (shut ? dt : -dt) / GATE_TIME, 0, 1);
@@ -495,26 +553,40 @@ export async function buildRail(ctx) {
     },
     // Plain data for evidence: nothing here moves the town.
     snapshot() {
-      const t = this.train;
-      const { units, offsets, trainLen } = t ? t.set : local;
-      return {
-        active: !!t,
-        s: t ? t.s : null,
-        speed: t ? t.speed : null,
-        dwelled: t ? t.dwelled : null,
-        waitT: t ? t.waitT : null,
-        nose: t ? t.s + units[0].front : null,
-        tail: t ? t.s - (trainLen - units[0].front) : null,
-        lineLength: line.length,
-        stationS,
-        express: t ? t.set === fast : null,
-        trainLen,
-        unitS: t ? units.map((u, k) => t.s - offsets[k]) : [],
-        departures: this.departures,
-        lastGap: this.lastGap,
-        nextIn: this.nextIn,
-        crossings: crossings.map(c => ({ key: c.key, x: c.x, z: c.z, s: c.s, closed: c.closed, armT: c.armT })),
+      const snapshotDirection = lane => {
+        const t = lane.train;
+        const { units, offsets, trainLen } = t ? t.set : lane.local;
+        return {
+          active: !!t,
+          s: t ? t.s : null,
+          speed: t ? t.speed : null,
+          dwelled: t ? t.dwelled : null,
+          waitT: t ? t.waitT : null,
+          nose: t ? t.s + units[0].front : null,
+          tail: t ? t.s - (trainLen - units[0].front) : null,
+          lineLength: lane.line.length,
+          stationS: lane.stationS,
+          express: t ? t.set === lane.fast : null,
+          trainLen,
+          unitS: t ? units.map((u, k) => t.s - offsets[k]) : [],
+          departures: lane.departures,
+          lastGap: lane.lastGap,
+          nextIn: lane.nextIn,
+        };
       };
+      const crossingSnapshots = crossings.map(c => ({
+        key: c.key, x: c.x, z: c.z, s: c.s, sByDirection: c.sByDirection,
+        closed: c.closed, armT: c.armT,
+      }));
+      if (dualTrack) {
+        return {
+          dualTrack: true,
+          active: directions.some(d => !!d.train),
+          directions: Object.fromEntries(directions.map(d => [d.id, snapshotDirection(d)])),
+          crossings: crossingSnapshots,
+        };
+      }
+      return { ...snapshotDirection(directions[0]), crossings: crossingSnapshots };
     },
   };
   // A plain platform slab east (or as sided) of the stopping cell: the

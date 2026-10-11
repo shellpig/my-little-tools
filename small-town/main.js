@@ -607,37 +607,56 @@ function decorateStation(building, station) {
   box(1.4, 0.32, 0.04, signMat, station.x, top + 0.26, (front + back) / 2, true);
   for (const dx of [-0.5, 0.5]) box(0.03, 0.12, 0.03, darkFrame, station.x + dx, top + 0.05, (front + back) / 2);
 
-  // Platform along the north side of the track (track at z = 6.4, platform spans z 4.8..6.0)
-  const platZ = 5.4;
-  const platDepth = 1.2;
   const platWidth = 4.4;
-  // The slab runs a cell past the canopy at each end so a whole train fits.
-  box(platWidth + 2 * CELL, 0.12, platDepth, kit.pavement, station.x, 0.06, platZ);
-  box(2.0, 0.04, platZ - platDepth / 2 - back, kit.pavement, station.x, 0.02, (back + platZ - platDepth / 2) / 2);
-
-  // Platform canopy on two posts with a warm downlight
   const downlight = std(0x222222, { emissive: 0xfff0d0, emissiveIntensity: 0 });
   glowing.push([downlight, 1.5]);
-  for (const dx of [-1.5, 1.5]) {
-    box(0.04, 0.46, 0.04, darkFrame, station.x + dx, 0.35, platZ, true);
-    post(station.x + dx, platZ, 0.04);
-  }
-  box(platWidth - 0.4, 0.025, platDepth - 0.3, std(0x3a3d44, { roughness: 0.7 }), station.x, 0.58, platZ, true);
-  box(platWidth - 1.0, 0.006, 0.15, downlight, station.x, 0.565, platZ);
+  const drawPlatform = (platZ, platDepth, outward, connectToStation, parent = scene) => {
+    // The slab runs a cell past the canopy at each end so a whole train fits.
+    box(platWidth + 2 * CELL, 0.12, platDepth, kit.pavement, station.x, 0.06, platZ, false, parent);
+    if (connectToStation) {
+      box(2.0, 0.04, platZ - platDepth / 2 - back, kit.pavement, station.x, 0.02,
+        (back + platZ - platDepth / 2) / 2, false, parent);
+    }
 
-  box(0.8, 0.18, 0.02, signMat, station.x, 0.42, platZ - 0.15);
-  for (const dx of [-0.3, 0.3]) box(0.02, 0.28, 0.02, darkFrame, station.x + dx, 0.26, platZ - 0.15);
+    // A matching canopy, warm downlight, sign and bench on each platform.
+    for (const dx of [-1.5, 1.5]) {
+      box(0.04, 0.46, 0.04, darkFrame, station.x + dx, 0.35, platZ, true, parent);
+      post(station.x + dx, platZ, 0.04);
+    }
+    box(platWidth - 0.4, 0.025, platDepth - 0.3, std(0x3a3d44, { roughness: 0.7 }), station.x, 0.58, platZ, true, parent);
+    box(platWidth - 1.0, 0.006, 0.15, downlight, station.x, 0.565, platZ, false, parent);
 
-  box(0.5, 0.015, 0.12, std(0x8a5a3a, { roughness: 0.7 }), station.x + 1.0, 0.18, platZ - 0.25, true);
-  for (const dx of [-0.2, 0.2]) box(0.02, 0.06, 0.1, darkFrame, station.x + 1.0 + dx, 0.15, platZ - 0.25);
+    const signZ = platZ + outward * 0.15;
+    box(0.8, 0.18, 0.02, signMat, station.x, 0.42, signZ, false, parent);
+    for (const dx of [-0.3, 0.3]) box(0.02, 0.28, 0.02, darkFrame, station.x + dx, 0.26, signZ, false, parent);
+
+    const benchZ = platZ + outward * 0.25;
+    box(0.5, 0.015, 0.12, std(0x8a5a3a, { roughness: 0.7 }), station.x + 1.0, 0.18, benchZ, true, parent);
+    for (const dx of [-0.2, 0.2]) box(0.02, 0.06, 0.1, darkFrame, station.x + 1.0 + dx, 0.15, benchZ, false, parent);
+  };
+  // North edge stays at z=4.8; its south edge now stops at z=5.7.
+  drawPlatform(5.25, 0.9, -1, true);
+  // The south platform sits beyond the eastbound track and ends at z=8.0.
+  const southPlatform = new THREE.Group();
+  scene.add(southPlatform);
+  drawPlatform(7.6, 0.8, 1, false, southPlatform);
+  return southPlatform;
 }
 
 function buildStation(commercial) {
   const mat = paletteMaterial(commercial, 1.2);
   return building('commercial', STATION.model, STATION.x, STATION, mat).then(obj => {
-    const c = collect(() => decorateStation(obj, STATION));
+    let southPlatform;
+    const c = collect(() => { southPlatform = decorateStation(obj, STATION); });
+    // Preserve the pivot used by existing station saves. The original north
+    // slab ended at z=6.0; the new south platform stays attached but does not
+    // change the station's saved origin.
+    const pivotBounds = new THREE.Box3();
+    for (const part of [obj, ...c.parts.filter(part => part !== southPlatform)]) pivotBounds.expandByObject(part);
+    pivotBounds.max.z = Math.max(pivotBounds.max.z, 6.0);
     editable('station', [obj, ...c.parts], {
       ...c,
+      pivotBounds,
       solids: [obj.userData.solid, ...c.solids],
       places: [PLACES.get(STATION.name)],
       points: [STATION_DOOR],
@@ -3480,9 +3499,9 @@ function hug(item) {
     });
 }
 
-function editable(id, parts, { solids: ss = [], posts: ps = [], places = [], points = [] } = {}) {
-  const box3 = new THREE.Box3();
-  for (const part of parts) box3.expandByObject(part);
+function editable(id, parts, { solids: ss = [], posts: ps = [], places = [], points = [], pivotBounds = null } = {}) {
+  const box3 = pivotBounds ?? new THREE.Box3();
+  if (!pivotBounds) for (const part of parts) box3.expandByObject(part);
   const centre = box3.getCenter(new THREE.Vector3());
   const pivot = new THREE.Group();
   pivot.position.set(Math.round(centre.x / SNAP) * SNAP, 0, Math.round(centre.z / SNAP) * SNAP);
