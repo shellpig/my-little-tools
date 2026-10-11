@@ -830,7 +830,7 @@ async function buildTown() {
   // Ground, then each street's sidewalks, curbs and road.
   // Grass over the map's bounds; dark ground beyond, where nothing can be built.
   const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
-  box(400, 0.1, 400, std(0x3a3c40), 0, -0.05, 0);
+  box(400, 0.1, 400, std(0x3a3c40), 0, -0.08, 0);
   box((iMax - iMin + 1) * CELL, 0.1, (jMax - jMin + 1) * CELL, std(0x667a52),
     (iMin + iMax) / 2 * CELL, -0.049, (jMin + jMax) / 2 * CELL);
   Object.assign(kit, { pavement: std(0xb3ada3), curb: std(0xd2ccc0) });

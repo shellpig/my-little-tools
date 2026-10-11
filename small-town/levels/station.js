@@ -87,23 +87,23 @@ const lamps = [
 ];
 
 const railCells = [];
-for (let i = -18; i <= 18; i++) railCells.push([i, 4]);
+for (let i = -30; i <= 29; i++) railCells.push([i, 4]);
 
 export default {
   id: 'station',
   name: '火車站',
   blurb: '一條鐵道穿過小鎮，車站前就是旅館與商店街。',
   preview: 'levels/station.jpg',
-  bounds: [-18, 18, -7, 6],
+  bounds: [-30, 29, -30, 29],
   roads: [
-    [-18, 0, 18, 0],
-    [-18, -5, 18, -5],
-    [8, -5, 8, 6],
+    [-30, 0, 29, 0],
+    [-30, -5, 29, -5],
+    [8, -30, 8, 29],
   ],
   walks: [[-2, 1, 2, 1]],
   paths: [],
   zebras,
-  bus: { from: [18, 0], stop: [1, 0], to: [-18, 0], riders: ['站前旅館', '便利商店'] },
+  bus: { from: [29, 0], stop: [1, 0], to: [-30, 0], riders: ['站前旅館', '便利商店'] },
   busStop: { x: 1.75, shelterX: 1.85, shelterZ: -1.0 },
   homes,
   shops,
@@ -142,7 +142,7 @@ export default {
   },
   camera: { target: [0, 0.2, 3], position: [4, 12, 18.2] },
   // 模擬城市式玩法：鏡頭可以拉遠看整張地圖，霧淡、陰影範圍蓋住整張地圖。
-  view: { maxDistance: 100, fog: [70, 200], shadow: 32 },
+  view: { maxDistance: 140, fog: [100, 260], shadow: 48 },
   // 鐵道南側的樹（世界座標）。
   trees: [
     [-28.64, 8.26], [-28.37, 9.05], [-28.39, 9.81], [-27.5, 8.04], [-26.97, 8.95], [-27.11, 10.18],
