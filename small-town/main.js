@@ -10,7 +10,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { PASSERBY_LINES } from './residents.js';
 import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
 import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
-import { levelById } from './levels/index.js';
+import { LEVELS, levelById } from './levels/index.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
@@ -3340,34 +3340,6 @@ function undo() {
   select(last.length === 1 && !last[0][0].removed ? last[0][0] : null);
 }
 
-// Replace the whole layout: everything not mentioned goes back to its default place.
-// Unversioned layouts are migrated in memory; the game key is only written at
-// the end, so a failed import never corrupts the current progress.
-async function loadLayout(layout) {
-  layout = migrateLayout(layout ?? {});
-  cancelPlacing();
-  // Build what the layout adds first, hidden, so undo hides it again.
-  for (const [id, s] of Object.entries(layout)) {
-    if (id[0] === '#' || !s.add || editables.has(id)) continue;
-    const item = await buildAdded(id, s.add);
-    applyState(item, { ...stateOf(item), removed: true });
-  }
-  const step = Object.assign([], { tiles: new Map(tiles), zebras: zebras.map(zb => ({ ...zb })) });
-  setTiles(layout['#tiles']);
-  setZebras(layout['#zebras'] ?? DEFAULT_ZEBRAS);
-  const pairs = [];
-  for (const item of editables.values()) {
-    step.push([item, stateOf(item)]);
-    pairs.push([item, footprintOf(item)]);
-    applyState(item, layout[item.id] ?? (item.add ? { ...stateOf(item), removed: true } : { ...item.base, removed: false }));
-  }
-  undos.push(step);
-  saveLayout();
-  settleTown();
-  for (const [item, before] of pairs) reseatCats(before, footprintOf(item));
-  select(null);
-}
-
 function select(item) {
   selected = item;
   outline.visible = !!item;
@@ -3906,12 +3878,88 @@ function endStroke() {
   settleTown();
 }
 
-// Three save slots in this browser, and layouts as .json files to keep or share.
-const SLOTS_KEY = 'small-town:layout-slots';
-const LAYOUT_FILE = { app: 'small-town', kind: 'layout', version: 1 };
+// Ten save slots in this browser, and layouts as .json files to keep or share.
+const SLOTS_KEY = 'small-town:slots';
+const OLD_SLOTS_KEY = 'small-town:layout-slots';
+const LAYOUT_FILE = { app: 'small-town', kind: 'layout', version: 2 };
+
+// Every game switch writes the level and layout at once, then reloads. A
+// failed write keeps the current level and progress: no reload, and the
+// scene and storage stay as they were.
+function switchGame(level, layout) {
+  try {
+    localStorage.setItem(GAME_KEY, JSON.stringify({ level, layout }));
+  } catch {
+    alert('無法切換：瀏覽器儲存空間不足或無法使用。');
+    return;
+  }
+  location.reload();
+}
+
+// A fixed top-down shot of the map centre, without editing helpers. Renders
+// offscreen without post-processing, flips the pixels upright and returns a
+// JPEG data URL.
+function takeShot() {
+  const W = 320, H = 180;
+  const prev = renderer.getRenderTarget();
+  const outlineWas = outline.visible;
+  const brushWas = brushMark.visible;
+  const placingWas = placing ? placing.pivot.visible : false;
+  const snap = new THREE.PerspectiveCamera(45, W / H, 0.1, 200);
+  const [tx, ty, tz] = LEVEL.camera.target;
+  snap.position.set(tx, ty + 30, tz + 0.01);
+  snap.lookAt(tx, ty, tz);
+  const rt = new THREE.WebGLRenderTarget(W, H);
+  rt.texture.colorSpace = THREE.SRGBColorSpace;
+  try {
+    outline.visible = false;
+    brushMark.visible = false;
+    if (placing) placing.pivot.visible = false;
+    renderer.setRenderTarget(rt);
+    renderer.render(scene, snap);
+    const pixels = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(rt, 0, 0, W, H, pixels);
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(W, H);
+    for (let y = 0; y < H; y++) img.data.set(pixels.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+    ctx.putImageData(img, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.7);
+  } finally {
+    outline.visible = outlineWas;
+    brushMark.visible = brushWas;
+    if (placing) placing.pivot.visible = placingWas;
+    renderer.setRenderTarget(prev);
+    rt.dispose();
+  }
+}
 
 function readSlots() {
-  try { return JSON.parse(localStorage.getItem(SLOTS_KEY) || '[null,null,null]'); } catch { return [null, null, null]; }
+  try {
+    const cur = JSON.parse(localStorage.getItem(SLOTS_KEY) || 'null');
+    if (Array.isArray(cur)) return Array.from({ length: 10 }, (_, i) => cur[i] ?? null);
+  } catch { /* fall through to the old slots */ }
+  // No new slots yet: move the old three into the first three (town level,
+  // no shot, A1 migration), leaving the old key and the game untouched.
+  // Only persist when old data actually moves; an empty panel reads
+  // without writing so a full storage never alerts here.
+  let moved = null;
+  try {
+    const old = JSON.parse(localStorage.getItem(OLD_SLOTS_KEY) || 'null');
+    if (Array.isArray(old) && old.some(s => s && typeof s.layout === 'object' && s.layout)) {
+      moved = Array.from({ length: 10 }, (_, i) => {
+        const s = old[i];
+        if (i > 2 || !s || typeof s.layout !== 'object' || !s.layout) return null;
+        return { savedAt: s.savedAt ?? Date.now(), level: 'town', layout: migrateLayout(s.layout), shot: null };
+      });
+    }
+  } catch { /* storage unavailable: treat as no old data */ }
+  if (!moved) return Array(10).fill(null);
+  try { localStorage.setItem(SLOTS_KEY, JSON.stringify(moved)); }
+  catch { alert('存檔失敗：瀏覽器儲存空間不足或無法使用。'); }
+  return moved;
 }
 
 function renderSlots() {
@@ -3919,27 +3967,84 @@ function renderSlots() {
   $('slot-list').replaceChildren(...slots.map((slot, i) => {
     const row = document.createElement('div');
     row.className = 'slot';
+    if (slot && slot.shot) {
+      const img = document.createElement('img');
+      img.src = slot.shot;
+      img.alt = '';
+      img.width = 160;
+      img.height = 90;
+      row.append(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.className = 'shot-empty';
+      ph.textContent = slot ? '無快照' : '空';
+      row.append(ph);
+    }
     const info = document.createElement('div');
-    info.innerHTML = `<b>存檔 ${i + 1}</b><span></span>`;
-    info.querySelector('span').textContent = slot
-      ? `${new Date(slot.savedAt).toLocaleString('zh-TW', { hour12: false })} · ${Object.keys(slot.layout).length} 處變動`
+    const title = document.createElement('b');
+    title.textContent = `存檔 ${i + 1}`;
+    const sub = document.createElement('span');
+    sub.textContent = slot
+      ? `${levelById(slot.level).name} · ${new Date(slot.savedAt).toLocaleString('zh-TW', { hour12: false })}`
       : '空';
+    info.append(title, sub);
     const save = document.createElement('button');
     save.textContent = '存到這裡';
     save.onclick = () => {
       if (slot && !confirm(`覆蓋存檔 ${i + 1}？`)) return;
-      slots[i] = { savedAt: Date.now(), layout: currentLayout() };
-      try { localStorage.setItem(SLOTS_KEY, JSON.stringify(slots)); } catch { /* storage unavailable */ }
+      const next = slots.slice();
+      next[i] = { savedAt: Date.now(), level: LEVEL.id, layout: currentLayout(), shot: takeShot() };
+      try {
+        localStorage.setItem(SLOTS_KEY, JSON.stringify(next));
+      } catch {
+        alert('存檔失敗：瀏覽器儲存空間不足或無法使用。');
+        return;
+      }
       renderSlots();
     };
     const load = document.createElement('button');
     load.textContent = '讀取';
     load.disabled = !slot;
-    load.onclick = () => loadLayout(slot.layout);
+    load.onclick = () => {
+      if (!confirm(`讀取存檔 ${i + 1}？目前未存檔的變動會消失。`)) return;
+      switchGame(levelById(slot.level).id, slot.layout);
+    };
     row.append(info, save, load);
     return row;
   }));
 }
+
+function renderLevels() {
+  $('level-cards').replaceChildren(...LEVELS.map(lv => {
+    const card = document.createElement('div');
+    card.className = 'level-card';
+    const img = document.createElement('img');
+    img.src = lv.preview;
+    img.alt = lv.name;
+    const body = document.createElement('div');
+    body.className = 'level-body';
+    const name = document.createElement('b');
+    name.textContent = lv.name;
+    const blurb = document.createElement('p');
+    blurb.textContent = lv.blurb;
+    const go = document.createElement('button');
+    go.textContent = '開始';
+    go.onclick = () => {
+      if (!confirm(`開始新的「${lv.name}」？目前未存檔的變動會消失。`)) return;
+      switchGame(lv.id, {});
+    };
+    body.append(name, blurb, go);
+    card.append(img, body);
+    return card;
+  }));
+}
+
+$('new-town').addEventListener('click', e => {
+  renderLevels();
+  $('levels').hidden = false;
+  e.currentTarget.blur();
+});
+$('levels-close').addEventListener('click', () => { $('levels').hidden = true; });
 
 $('edit-slots').addEventListener('click', () => {
   $('slots').hidden = !$('slots').hidden;
@@ -3947,7 +4052,7 @@ $('edit-slots').addEventListener('click', () => {
 });
 $('slots-close').addEventListener('click', () => { $('slots').hidden = true; });
 $('layout-export').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify({ ...LAYOUT_FILE, layout: currentLayout() }, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ ...LAYOUT_FILE, level: LEVEL.id, layout: currentLayout() }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'small-town-layout.json';
@@ -3962,7 +4067,13 @@ $('layout-file').addEventListener('change', async e => {
   try {
     const data = JSON.parse(await file.text());
     if (data.app !== LAYOUT_FILE.app || data.kind !== LAYOUT_FILE.kind || !data.layout || typeof data.layout !== 'object' || Array.isArray(data.layout)) throw new Error();
-    await loadLayout(data.layout);
+    const level = (data.version === 1 || data.level === undefined) ? 'town' : data.level;
+    if (!LEVELS.some(lv => lv.id === level)) {
+      alert('這個佈局檔的關卡不存在');
+      return;
+    }
+    if (!confirm(`匯入這個佈局檔？將切換到「${levelById(level).name}」並取代目前進度。`)) return;
+    switchGame(level, migrateLayout(data.layout));
   } catch {
     alert('這不是小鎮的佈局檔。');
   }
@@ -3971,14 +4082,8 @@ $('layout-file').addEventListener('change', async e => {
 $('edit').addEventListener('click', e => { setEditing(!editing); e.currentTarget.blur(); });
 $('edit-undo').addEventListener('click', undo);
 $('edit-reset').addEventListener('click', () => {
-  if (!confirm('還原成預設的小鎮？所有搬動和刪除都會清除。')) return;
-  try {
-    localStorage.setItem(GAME_KEY, JSON.stringify({ level: LEVEL.id, layout: { '#v': 2 } }));
-  } catch {
-    alert('無法還原：瀏覽器儲存空間不足或無法使用。');
-    return;
-  }
-  location.reload();
+  if (!confirm(`還原成預設的「${LEVEL.name}」？所有搬動和刪除都會清除。`)) return;
+  switchGame(LEVEL.id, {});
 });
 
 // ---------- main loop ----------

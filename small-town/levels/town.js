@@ -57,6 +57,7 @@ export default {
   id: 'town',
   name: '小鎮',
   blurb: '一條大街、旅館與公園的安靜小鎮。',
+  preview: 'levels/town.jpg',
   bounds: [-18, 18, -7, 6],
   roads: [[-18, 0, 18, 0], [-18, -5, 18, -5]],
   walks: [],
