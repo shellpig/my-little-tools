@@ -104,9 +104,7 @@
   .edit-bar button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, .06);
     color: var(--text); font-family: inherit; font-size: 13px; cursor: pointer; }
   .edit-bar button:hover { background: rgba(255, 255, 255, .14); }
-  .slots { position: fixed; left: 50%; bottom: 76px; z-index: 6; width: min(580px, calc(100vw - 32px)); box-sizing: border-box;
-    transform: translateX(-50%); padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px;
-    background: rgba(16, 20, 30, .94); }
+  .slots { margin-top: 12px; }
   .slots-head { display: flex; align-items: center; margin-bottom: 8px; font-size: 15px; }
   .slots-head .toggle { margin-left: auto; }
   .slot { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
@@ -140,6 +138,8 @@
   .levels-head { display: flex; align-items: center; font-size: 17px; }
   .levels-head .toggle { margin-left: auto; }
   .level-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+  .level-cards[hidden] { display: none; }
+  .levels-tabs { margin-top: 12px; }
   .level-card { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .04); }
   .level-card img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #000; }
   .level-card .level-body { padding: 10px 12px 12px; }
@@ -219,11 +219,11 @@
 
 <div class="panel">
   <div class="clock">
-    <b id="clock">21:00</b><span id="period">夜晚</span>
+    <b id="clock">06:00</b><span id="period">早上</span>
     <button id="toggle" class="toggle" aria-expanded="true" aria-controls="controls" title="收合（H）">▾</button>
   </div>
   <div id="controls">
-  <input id="time" type="range" min="0" max="24" step="0.01" value="21">
+  <input id="time" type="range" min="0" max="24" step="0.01" value="6">
   <div class="row">
     <button data-speed="0">暫停</button>
     <button data-speed="60" class="on">60×</button>
@@ -251,12 +251,11 @@
 <button id="play" class="play"><span class="ico">🚶</span><span>散步模式（P）</span></button>
 <button id="dress" class="play dress"><span class="ico">👕</span><span>換裝（C）</span></button>
 <button id="edit" class="play edit"><span class="ico">🛠</span><span>編輯（B）</span></button>
-<button id="new-town" class="play newtown"><span class="ico">🏘</span><span>開始新小鎮</span></button>
+<button id="new-town" class="play newtown"><span class="ico">🏘</span><span>關卡與存檔</span></button>
 <div class="edit-bar">
   <span>拖曳移動建築、樹、路燈 · R 旋轉 · Delete 刪除 · Ctrl+Z 復原</span>
   <button id="edit-undo">復原</button>
   <button id="edit-add">➕ 新增</button>
-  <button id="edit-slots">💾 存檔</button>
   <button id="edit-reset">還原預設</button>
 </div>
 <div id="add-panel" class="add-panel" hidden>
@@ -275,20 +274,23 @@
     <div id="add-models" class="add-models"></div>
   </div>
 </div>
-<div id="slots" class="slots" hidden>
-  <div class="slots-head"><b>小鎮佈局存檔</b><button id="slots-close" class="toggle" title="關閉">✕</button></div>
-  <div id="slot-list"></div>
-  <div class="slots-foot">
-    <button id="layout-export">匯出檔案</button>
-    <button id="layout-import">匯入檔案</button>
-    <input id="layout-file" type="file" accept=".json,application/json" hidden>
-  </div>
-</div>
 <div id="prompt" class="prompt" hidden></div>
 <div id="levels" class="levels" hidden>
-  <div class="levels-card" role="dialog" aria-label="開始新小鎮">
-    <div class="levels-head"><b>開始新小鎮</b><button id="levels-close" class="toggle" title="關閉">✕</button></div>
+  <div class="levels-card" role="dialog" aria-label="關卡與存檔">
+    <div class="levels-head"><b>關卡與存檔</b><button id="levels-close" class="toggle" title="關閉">✕</button></div>
+    <div class="row levels-tabs">
+      <button id="levels-tab" class="on">開始新小鎮</button>
+      <button id="slots-tab">💾 存檔／讀檔</button>
+    </div>
     <div id="level-cards" class="level-cards"></div>
+    <div id="slots" class="slots" hidden>
+      <div id="slot-list"></div>
+      <div class="slots-foot">
+        <button id="layout-export">匯出檔案</button>
+        <button id="layout-import">匯入檔案</button>
+        <input id="layout-file" type="file" accept=".json,application/json" hidden>
+      </div>
+    </div>
   </div>
 </div>
 <div id="stick" class="stick"><div class="knob"></div></div>

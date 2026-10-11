@@ -147,7 +147,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0b1020, 20, 55);
+scene.fog = new THREE.Fog(0x0b1020, 20, 70);
 
 const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
 camera.position.set(...LEVEL.camera.position);
@@ -2170,7 +2170,7 @@ function updateTraffic(dt, activity) {
 
 // ---------- time of day ----------
 
-let time = +(new URLSearchParams(location.search).get('t') ?? 21);
+let time = +(new URLSearchParams(location.search).get('t') ?? 6);
 let speed = 60;
 let lastSpeed = 60;
 
@@ -3356,7 +3356,6 @@ function setEditing(on) {
     setBrush(null);
     cancelPlacing();
     select(null);
-    $('slots').hidden = true;
     $('add-panel').hidden = true;
   }
 }
@@ -4039,18 +4038,24 @@ function renderLevels() {
   }));
 }
 
+function setMenuTab(saves) {
+  $('level-cards').hidden = saves;
+  $('slots').hidden = !saves;
+  $('levels-tab').classList.toggle('on', !saves);
+  $('slots-tab').classList.toggle('on', saves);
+  if (saves) renderSlots();
+}
+
 $('new-town').addEventListener('click', e => {
   renderLevels();
+  setMenuTab(false);
   $('levels').hidden = false;
   e.currentTarget.blur();
 });
 $('levels-close').addEventListener('click', () => { $('levels').hidden = true; });
 
-$('edit-slots').addEventListener('click', () => {
-  $('slots').hidden = !$('slots').hidden;
-  if (!$('slots').hidden) renderSlots();
-});
-$('slots-close').addEventListener('click', () => { $('slots').hidden = true; });
+$('levels-tab').addEventListener('click', () => setMenuTab(false));
+$('slots-tab').addEventListener('click', () => setMenuTab(true));
 $('layout-export').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify({ ...LAYOUT_FILE, level: LEVEL.id, layout: currentLayout() }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
