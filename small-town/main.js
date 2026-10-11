@@ -349,13 +349,13 @@ function paletteTexture(canvas) {
 }
 
 // An emissive map that lights a specific palette region.
-function swatchMask(x, y, w, h) {
+function swatchMask(x, y, w, h, color = '#ffbe73') {
   const c = document.createElement('canvas');
   c.width = c.height = 512;
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, 512, 512);
-  ctx.fillStyle = '#ffbe73';
+  ctx.fillStyle = color;
   ctx.fillRect(x, y, w, h);
   return paletteTexture(c);
 }
@@ -442,6 +442,7 @@ function model(pack, name) {
   if (!cache.has(url)) {
     cache.set(url, loader.loadAsync(url).then(gltf => {
       if (pack === 'car-kit' || pack === 'train-kit') clipToMap(gltf.scene);
+      if (pack === 'train-kit' && name.startsWith('train-')) lightCarriage(gltf.scene);
       return gltf;
     }));
   }
@@ -858,11 +859,25 @@ function buildPark(jobs, plantMat) {
 // the town exists (so tiles and roads are real) but before the layout's
 // painted roads land. Without rail data this is a no-op: nothing loads,
 // nothing renders, rand() is untouched.
+// Train windows (the Train Kit's light-blue glass swatch) light up at night
+// in a warm white, on every carriage material.
+let carriageGlow = null;
+function lightCarriage(root) {
+  carriageGlow ??= swatchMask(0, 384, 64, 128, '#ffe6bf');
+  root.traverse(o => {
+    if (!o.isMesh || o.material.emissiveMap) return;
+    Object.assign(o.material, { emissive: new THREE.Color(0xffffff), emissiveMap: carriageGlow, emissiveIntensity: 0 });
+    glowing.push([o.material, 1.1]);
+  });
+}
+
 async function initRail() {
   if (!LEVEL.rail) return;
+  const headlight = clipMat(std(0x333333, { emissive: 0xfff1d6, emissiveIntensity: 0 }));
+  glowing.push([headlight, 4]);
   rail = await buildRail({
     LEVEL, CELL, scene, tiles, roads, posts,
-    model, place, post, dirOf,
+    model, place, post, dirOf, headlight,
     onStationStop: burstCommuters,
   });
 }
@@ -907,9 +922,9 @@ async function buildTown() {
     const mat = paletteMaterial(commercial, shop.glow, shop.closes);
     jobs.push(building('commercial', shop.model, shop.x, shop, mat).then(obj => {
       const c = collect(() => decorateShop(obj, shop));
-      editable(`shop:${shop.name}`, [obj, ...c.parts], {
+      paintable(editable(`shop:${shop.name}`, [obj, ...c.parts], {
         solids: [obj.userData.solid], places: [PLACES.get(shop.name)], points: shop.name === '便利商店' && storeDoor ? [storeDoor] : [],
-      });
+      }), mat, false);
     }));
   }
 
@@ -917,10 +932,12 @@ async function buildTown() {
   const townHouses = ['building-b', 'building-d', 'building-f', 'building-g'];
   const villas = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g'];
   HOMES.forEach((home, i) => {
+    const mat = home.villa ? villaMat() : townHouseMat(i);
     const made = home.villa
-      ? building('suburban', villas[i % villas.length], home.x, home, villaMat())
-      : building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, townHouseMat(i));
-    jobs.push(made.then(obj => editable(`home:${i}`, [obj], { solids: [obj.userData.solid], places: [homeDoors[i]] })));
+      ? building('suburban', villas[i % villas.length], home.x, home, mat)
+      : building('commercial', home.x === 0 ? 'building-e' : townHouses[i % 4], home.x, home, mat);
+    jobs.push(made.then(obj => paintable(editable(`home:${i}`, [obj], { solids: [obj.userData.solid], places: [homeDoors[i]] }),
+      mat, !!home.villa)));
   });
 
   // South of the main street: the park, with a gas station and a car park either side.
@@ -3486,10 +3503,27 @@ function editable(id, parts, { solids: ss = [], posts: ps = [], places = [], poi
   return item;
 }
 
-const stateOf = item => ({ x: item.pivot.position.x, z: item.pivot.position.z, rot: item.pivot.rotation.y, removed: item.removed });
+const stateOf = item => ({ x: item.pivot.position.x, z: item.pivot.position.z, rot: item.pivot.rotation.y, removed: item.removed,
+  ...(item.paint && { paint: item.paint }) });
+
+// Houses, shops and villas can be repainted: `paint` is { wall } on the
+// commercial palette or { wall, roof } on a villa's; none is how it was built.
+function paintable(item, mat, villa) {
+  item.paintable = { mat, villa, original: mat.map };
+  return item;
+}
+
+function applyPaint(item, paint) {
+  const { mat, villa, original } = item.paintable;
+  item.paint = paint;
+  mat.map = !paint ? original
+    : villa ? villaPalette(paint.wall, paint.roof).map
+    : (paint.wall >= 0 ? kit.pastels[paint.wall] : kit.commercial).map;
+}
 
 // Put an item where `state` says and bring everything that hangs off it along.
-function applyState(item, { x, z, rot, removed }) {
+function applyState(item, { x, z, rot, removed, paint }) {
+  if (item.paintable) applyPaint(item, paint);
   item.pivot.position.set(x, 0, z);
   item.pivot.rotation.y = rot;
   item.pivot.updateMatrixWorld(true);
@@ -3554,7 +3588,7 @@ function currentLayout() {
     // Added things are kept with how to build them again, unless removed.
     if (item.add) {
       if (!s.removed && item !== placing) layout[item.id] = { ...s, add: item.add };
-    } else if (s.removed || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) {
+    } else if (s.removed || s.paint || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) {
       layout[item.id] = s;
     }
   }
@@ -3607,6 +3641,37 @@ function select(item) {
   selected = item;
   outline.visible = !!item;
   if (item) hug(item);
+  renderPaintPanel();
+}
+
+// The colours of the selected house, shop or villa, in a panel of its own
+// (not while the add panel is open).
+function renderPaintPanel() {
+  const item = selected;
+  const show = !!item?.paintable && editing && !placing && $('add-panel').hidden;
+  $('paint-panel').hidden = !show;
+  if (!show) return;
+  const { villa } = item.paintable;
+  const now = currentPaint(item);
+  const paint = next => () => change(item, { ...stateOf(item), paint: { ...now, ...next } });
+  $('paint-walls').replaceChildren(...(villa
+    ? VILLA_WALLS.map(([label], i) => chip(label, now.wall === i, paint({ wall: i })))
+    : WALLS.map(([label, w]) => chip(label, now.wall === w, paint({ wall: w })))));
+  $('paint-roof-box').hidden = !villa;
+  $('paint-roofs').replaceChildren(...VILLA_ROOFS.map(([label], i) => chip(label, now.roof === i, paint({ roof: i }))));
+}
+
+// The colours a building shows now, read back from its palette.
+function currentPaint(item) {
+  const { mat, villa } = item.paintable;
+  if (!villa) return { wall: kit.pastels.findIndex(p => p.map === mat.map) };
+  for (const [key, pal] of villaPalettes) {
+    if (pal.map === mat.map) {
+      const [wall, roof] = key.split(',').map(Number);
+      return { wall, roof };
+    }
+  }
+  return { wall: 0, roof: 0 };
 }
 
 function setEditing(on) {
@@ -3621,6 +3686,7 @@ function setEditing(on) {
     select(null);
     $('add-panel').hidden = true;
   }
+  renderPaintPanel();
 }
 
 function itemAt(e) {
@@ -3664,6 +3730,8 @@ addEventListener('pointerdown', e => {
     return;
   }
   controls.enabled = false;
+  // Picking a paintable building swaps the add panel for its colours.
+  if (item.paintable) $('add-panel').hidden = true;
   select(item);
   const at = raycaster.ray.intersectPlane(floor, new THREE.Vector3());
   drag = { item, before: stateOf(item), offset: item.pivot.position.clone().sub(at), moved: false };
@@ -3777,6 +3845,7 @@ async function buildAdded(id, add) {
       ? collect(() => decorateShop(obj, { x: 0, facing: 1, name: add.name, ...SHOP_THEMES[add.theme], closes: 22 }))
       : { parts: [] };
     item = editable(id, [obj, ...c.parts], { solids: [obj.userData.solid] });
+    paintable(item, mat, villa);
   }
   item.add = add;
   return item;
@@ -3843,12 +3912,13 @@ function addFor(t, model) {
 
 function renderAddPanel() {
   const t = ADD_TYPES.find(a => a.type === addChoice.type);
-  const restyle = change => () => {
-    Object.assign(addChoice, change);
-    if (change.type && change.type !== 'paving') setBrush(null);
+  const restyle = pick => () => {
+    Object.assign(addChoice, pick);
+    if (pick.type && pick.type !== 'paving') setBrush(null);
     renderAddPanel();
+    if (pick.type) return;
     // A new colour repaints the building still in hand, keeping its turn.
-    if (!change.type && placing?.add.type === t.type) startPlacing(addFor(t, placing.add.model), placing.pivot.rotation.y);
+    if (placing?.add.type === t.type) startPlacing(addFor(t, placing.add.model), placing.pivot.rotation.y);
   };
   $('add-paving').hidden = t.type !== 'paving';
   $('add-model-box').hidden = t.type === 'paving';
@@ -3880,13 +3950,16 @@ function renderAddPanel() {
 
 $('edit-add').addEventListener('click', () => {
   $('add-panel').hidden = !$('add-panel').hidden;
+  renderPaintPanel();
   if (!$('add-panel').hidden) renderAddPanel();
   else cancelPlacing();
 });
 $('add-close').addEventListener('click', () => {
   $('add-panel').hidden = true;
   cancelPlacing();
+  renderPaintPanel();
 });
+$('paint-close').addEventListener('click', () => select(null));
 renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preventDefault(); });
 
 // ---------- paving ----------

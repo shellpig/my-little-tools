@@ -238,6 +238,14 @@ export async function buildRail(ctx) {
       const front = b.max.z * TRAIN_SCALE;
       const rear = b.min.z * TRAIN_SCALE;
       units.push({ obj, len: front - rear, front, rear });
+      // A pair of headlights on the lead unit's nose.
+      if (!units[1] && ctx.headlight) {
+        for (const x of [-0.6, 0.6]) {
+          const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.04), ctx.headlight);
+          lamp.position.set(b.max.x * x, b.max.y * 0.3, b.max.z + 0.02);
+          obj.add(lamp);
+        }
+      }
     }
     const offsets = [0];
     for (let k = 1; k < units.length; k++) offsets.push(offsets[k - 1] - units[k - 1].rear + units[k].front + TRAIN_GAP);
