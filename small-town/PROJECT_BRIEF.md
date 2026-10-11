@@ -66,3 +66,5 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 | `docs/P1/實作規格.md` | P1 各 Subphase 完成後什麼必須成立 |
 | `docs/P1/開發設計方針.md` | 資料格式、模組、儲存 key、接線 |
 | `docs/P1/測試指南.md` | 各 Subphase 的驗收步驟與證據 |
+| `docs/others/conductor-handbook.md` | 指揮外部 worker（agy／ChatGPT／Muse）實作的流程、驗證 gate、審核清單 |
+| `docs/others/local-tools.md` | 本機起站、外部 reviewer／worker 的啟動指令 |
