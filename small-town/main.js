@@ -5093,6 +5093,7 @@ function setupOpsPanel() {
   const opsPanel = $('ops-panel');
   const opsClose = $('ops-close');
   const unlimitedBox = $('ops-unlimited');
+  const growthOnBox = $('ops-growth-on');
   if (!opsBtn || !opsPanel) return;
 
   unlimitedBox.checked = p2State.unlimited;
@@ -5100,6 +5101,10 @@ function setupOpsPanel() {
     p2State.unlimited = unlimitedBox.checked;
     saveLayout();
     updateMoneyUI();
+  });
+  growthOnBox.addEventListener('change', () => {
+    p2State.growth.on = growthOnBox.checked;
+    saveLayout();
   });
 
   opsBtn.hidden = false;
@@ -5131,6 +5136,7 @@ function setupOpsPanel() {
         }
         if ($('ops-train-tab')) $('ops-train-tab').hidden = currentOpsTab !== 'train';
         if ($('ops-bus-tab')) $('ops-bus-tab').hidden = currentOpsTab !== 'bus';
+        $('ops-town-tab').hidden = currentOpsTab !== 'town';
         renderOpsPanel();
       });
     }
@@ -5145,7 +5151,21 @@ function setupOpsPanel() {
     } else if (currentOpsTab === 'bus') {
       renderBusList();
       renderBusBuyButton();
+    } else if (currentOpsTab === 'town') {
+      renderTownTab();
     }
+  }
+
+  const GROWTH_SPEED_LABELS = { slow: '慢', normal: '一般', fast: '快' };
+
+  function renderTownTab() {
+    growthOnBox.checked = p2State.growth.on;
+    $('ops-growth-speeds').replaceChildren(...Object.entries(GROWTH_SPEED_LABELS).map(([key, label]) =>
+      chip(label, p2State.growth.speed === key, () => {
+        p2State.growth.speed = key;
+        saveLayout();
+        renderTownTab();
+      })));
   }
 
   function renderBusList() {

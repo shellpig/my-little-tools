@@ -224,6 +224,9 @@ export const FACILITIES = {
   },
 };
 
+export const GROWTH_SPEEDS = { slow: 1, normal: 2, fast: 4 };
+export const GROWTH_MIN_SCORE = 5;
+
 export function createDefaultP2() {
   return {
     v: 1,
@@ -233,6 +236,7 @@ export function createDefaultP2() {
     fleet: DEFAULT_FLEET.map(t => ({ ...t })),
     timetable: DEFAULT_TIMETABLE.map(t => ({ ...t })),
     buses: [{ color: 'green' }],
+    growth: { on: true, speed: 'normal', cooldown: {} },
     ledger: [],
   };
 }
@@ -262,6 +266,15 @@ export function normalizeP2(rawP2) {
     out.buses = out.buses.filter(b => b && typeof b === 'object').map(b => ({
       color: (typeof b.color === 'string' && BUS_COLORS[b.color] !== undefined) ? b.color : 'green',
     }));
+  }
+  if (!out.growth || typeof out.growth !== 'object' || Array.isArray(out.growth)) {
+    out.growth = { on: true, speed: 'normal', cooldown: {} };
+  } else {
+    const g = { ...out.growth };
+    if (typeof g.on !== 'boolean') g.on = true;
+    if (typeof g.speed !== 'string' || !(g.speed in GROWTH_SPEEDS)) g.speed = 'normal';
+    if (!g.cooldown || typeof g.cooldown !== 'object' || Array.isArray(g.cooldown)) g.cooldown = {};
+    out.growth = g;
   }
   if (!Array.isArray(out.ledger)) {
     out.ledger = [];
@@ -420,4 +433,40 @@ export function canAssignTrain(fleet, timetable, hour, dir, trainId, stop) {
   const candidateTrips = [...remaining, { train: trainId, dir, hour, stop: !!stop }];
 
   return validateTrainTrips(f.type, candidateTrips);
+}
+
+// ---------- town growth (P2-D) ----------
+
+// A lot's growth score (P2-D table); the caller gathers everything from the scene.
+export function lotScore(lot, ctx) {
+  let score = 2;
+
+  if (ctx.stops > 0) {
+    const dStation = Math.hypot(lot.x - ctx.station.x, lot.z - ctx.station.z) / ctx.cell;
+    if (dStation <= 12) {
+      score += 3;
+    } else if (dStation <= 24) {
+      score += 1;
+    }
+    if (ctx.stops >= 6 && dStation <= 24) {
+      score += 1;
+    }
+  }
+
+  if (ctx.busCells?.has(lot.cell)) {
+    score += 2;
+  }
+
+  for (const f of ctx.facilities) {
+    const d = Math.hypot(lot.x - f.x, lot.z - f.z) / ctx.cell;
+    if (d <= f.radius) {
+      score += f.growth;
+    }
+  }
+
+  if (lot.neighbour) {
+    score += 1;
+  }
+
+  return score;
 }
