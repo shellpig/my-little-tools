@@ -24,6 +24,12 @@
     text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
   .money.negative { color: #ff6b6b; }
   body.has-ops .money { display: inline-block; }
+  .mute { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 10px; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px;
+    background: rgba(255, 255, 255, .04); color: var(--text); font-size: 15px; cursor: pointer;
+    vertical-align: middle; }
+  .mute:hover { background: rgba(255, 255, 255, .1); }
+  .mute[hidden] { display: none; }
   .toast { position: fixed; right: 276px; top: 20px; z-index: 10; padding: 10px 16px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     backdrop-filter: blur(12px); color: var(--text); font-size: 14px; font-weight: 700;
@@ -253,6 +259,7 @@
 <div class="title">
   <h1>小鎮</h1>
   <div id="money" class="money">資金 5,000 萬</div>
+  <button id="mute" class="mute" title="平交道鈴聲" hidden>🔔</button>
   <p>點路上的人聽他說話，找出躲起來的貓，點噴水池許願。左鍵拖曳平移，右鍵拖曳旋轉，滾輪縮放。</p>
 </div>
 

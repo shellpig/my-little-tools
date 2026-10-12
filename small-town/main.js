@@ -5298,6 +5298,54 @@ function updateGrowing(dt) {
   }
 }
 
+// ---------- crossing bell (P2-E) ----------
+
+let audioCtx = null;
+let tones = [];
+let bellT = 0;
+let bellTone = -1;
+let muted = false;
+const muteBtn = $('mute');
+
+// Two square waves that take turns, run through a quiet master gain. Browsers
+// only allow audio after a user gesture, so this waits for the first one.
+function initAudio() {
+  audioCtx = new AudioContext();
+  const master = audioCtx.createGain();
+  master.gain.value = 0.04;
+  master.connect(audioCtx.destination);
+  tones = [750, 600].map(hz => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = hz;
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0;
+    osc.connect(gain).connect(master);
+    osc.start();
+    return gain;
+  });
+}
+
+function setMuted(val) {
+  muted = val;
+  muteBtn.textContent = muted ? '🔕' : '🔔';
+  try { localStorage.setItem('small-town:muted', muted ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+try { setMuted(localStorage.getItem('small-town:muted') === '1'); } catch { /* storage unavailable */ }
+muteBtn.addEventListener('click', () => { setMuted(!muted); muteBtn.blur(); });
+
+// Ding-dong while a nearby crossing is closed; real time, not game speed.
+function updateBell(dt) {
+  if (!audioCtx) return;
+  const ringing = !muted && speed > 0 && rail.crossings.some(c =>
+    c.closed && Math.hypot(camera.position.x - c.x, camera.position.y, camera.position.z - c.z) < 40);
+  bellT = ringing ? bellT + dt : 0;
+  const tone = ringing ? Math.floor(bellT / 0.35) % 2 : -1;
+  if (tone === bellTone) return;
+  bellTone = tone;
+  tones.forEach((gain, k) => gain.gain.setTargetAtTime(k === tone ? 1 : 0, audioCtx.currentTime, 0.01));
+}
+
 // ---------- main loop ----------
 
 const clock = new THREE.Clock();
@@ -5364,6 +5412,7 @@ function frame() {
     updateCats(dt);
   }
 
+  if (rail) updateBell(dt);
   if (wishes) wishes.update(dt);
   updatePlayer(dt);
   updateTalk(dt);
@@ -5378,6 +5427,16 @@ function frame() {
 // walks, so the first plans already see the real walk grid.
 await buildTown();
 await initRail();
+if (rail) {
+  muteBtn.hidden = false;
+  const once = () => {
+    removeEventListener('pointerdown', once);
+    removeEventListener('keydown', once);
+    initAudio();
+  };
+  addEventListener('pointerdown', once);
+  addEventListener('keydown', once);
+}
 await applyLayout();
 await Promise.all([addPeople(), addTraffic()]);
 addCats();
