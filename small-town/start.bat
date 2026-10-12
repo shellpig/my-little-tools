@@ -4,7 +4,7 @@ rem Serve the town over http (browsers block loading models from file://)
 rem and open it in the default browser. Close this window to stop.
 cd /d "%~dp0"
 
-set PORT=8765
+set PORT=8766
 set PY=python
 where python >nul 2>nul || set PY=py
 where %PY% >nul 2>nul || (

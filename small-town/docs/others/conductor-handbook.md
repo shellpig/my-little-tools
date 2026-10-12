@@ -48,7 +48,7 @@ prompt 寫成檔案，存 `C:\_work\AI_Work\Tools\agy-runs\<worker>-small-town-<
 ```
 git pull --ff-only（ChatGPT／網頁版 Muse）或 git diff（agy／OpenCode Muse 直接改本機）
 → node --check small-town/main.js（及改到的其他 .js）
-→ 瀏覽器實測（http://localhost:8765/，見 docs/P1/測試指南.md 的測試原則）：
+→ 瀏覽器實測（http://localhost:8766/，見 docs/P1/測試指南.md 的測試原則）：
    強制重抓改過的檔、帶新 ?v= 重載、主控台無錯誤、跑該步驗收項、截圖
 → 第 1 關回歸（測試指南指定的基準截圖對照）
 → 讀 diff（§5 checklist）

@@ -15,7 +15,7 @@ Repo 路徑：`E:\AI_Work\projects\my-little-tools`；小鎮在 `small-town\`。
 
 ### 本機執行
 
-- 起站：`small-town\start.bat`（`python -m http.server 8765 --bind 127.0.0.1`，工作目錄 `small-town`），網址 `http://localhost:8765/`；停站：`stop.bat`。Claude Code 的 preview 設定在 `.claude/launch.json`（不 commit）。
+- 起站：`small-town\start.bat`（`python -m http.server 8766 --bind 127.0.0.1`，工作目錄 `small-town`），網址 `http://localhost:8766/`；停站：`stop.bat`。Claude Code 的 preview 設定在 `.claude/launch.json`（不 commit）。
 - 小鎮沒有建置、沒有測試框架；Python 只用來起站與跑一次性的字串替換腳本，一律用 repo 根目錄的 `.\.venv\Scripts\python.exe`（已建立、不 commit、不裝套件）。不存在時用 `python -m venv .venv` 重建。`start.bat` 是給一般使用者雙擊用的，維持用系統 Python。
 - 語法檢查：`node --check small-town/main.js`。
 - 瀏覽器實測步驟見 `docs/P1/測試指南.md`「測試原則」。
