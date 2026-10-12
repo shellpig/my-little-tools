@@ -17,7 +17,7 @@ import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
   BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY, FACILITIES,
   normalizeP2, validateTimetable, canAssignTrain, POP, settle,
-  lotScore, GROWTH_SPEEDS, GROWTH_MIN_SCORE
+  lotScore, GROWTH_SPEEDS, GROWTH_MIN_SCORE, SHOP_NAMES
 } from './atrain.js';
 
 const BUS_COLOR_LABELS = {
@@ -4195,6 +4195,8 @@ addEventListener('keydown', e => {
     if (selected.add?.type === 'facility') {
       refund = applyMoney(FACILITIES[selected.add.kind].price / 2);
     }
+    // A grown building's lot rests for a week.
+    if (selected.add?.auto) p2State.growth.cooldown[selected.add.lot] = p2State.day + 7;
     change(selected, { ...stateOf(selected), removed: true });
     if (refund) undos.at(-1).money = refund;
   }
@@ -4439,10 +4441,10 @@ function renderAddPanel() {
   if (t.type === 'facility') {
     $('add-models').className = '';
     const earnChips = Object.entries(FACILITIES)
-      .filter(([, f]) => f.group === 'earn')
+      .filter(([, f]) => f.group === 'earn' && f.buyable !== false)
       .map(([k, f]) => chip(`${f.name} ${f.price}萬`, placing?.add?.kind === k, () => startFacilityPlacing(k)));
     const decoChips = Object.entries(FACILITIES)
-      .filter(([, f]) => f.group === 'deco')
+      .filter(([, f]) => f.group === 'deco' && f.buyable !== false)
       .map(([k, f]) => chip(`${f.name} ${f.price}萬`, placing?.add?.kind === k, () => startFacilityPlacing(k)));
 
     const l1 = document.createElement('div');
@@ -5030,9 +5032,11 @@ const HOUSE_LOT = [1.0, 1.2]; // width along the street, depth
 const VILLA_LOT = [1.5, 1.3];
 const GROW_HOUSES = ['building-b', 'building-d', 'building-f', 'building-g'];
 const GROW_VILLAS = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g'];
+const GROW_SHOPS = ['building-a', 'building-c', 'building-h'];
 const LOT_NORMALS = { [NORTH]: [0, -1], [SOUTH]: [0, 1], [EAST]: [1, 0], [WEST]: [-1, 0] };
 const growing = []; // { pivot, t } rising out of the ground
 let growBusy = false;
+const levelShopIds = new Set(SHOPS.map(s => `shop:${s.name}`));
 
 const overlaps = (a, b) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
 const postBox = p => ({ minX: p.x - p.r, maxX: p.x + p.r, minZ: p.z - p.r, maxZ: p.z + p.r });
@@ -5044,17 +5048,19 @@ function allLots(rects) {
   const lots = [];
   for (const { side, x, z } of rects) {
     if (!side) continue;
-    const [nx, nz] = LOT_NORMALS[side];
     const [i, j] = [Math.round(x / CELL), Math.round(z / CELL)];
-    const along = nx ? z : x;
-    for (let k = Math.ceil(along - CELL / 2); k < along + CELL / 2; k++) {
-      lots.push({
-        key: `${i},${j},${side},${k}`, cell: cellKey(i, j),
-        nx, nz, fx: nx ? x + nx * FRONTAGE : k, fz: nx ? k : z + nz * FRONTAGE,
-      });
-    }
+    const along = LOT_NORMALS[side][0] ? z : x;
+    for (let k = Math.ceil(along - CELL / 2); k < along + CELL / 2; k++) lots.push(lotAt(i, j, side, k));
   }
   return lots;
+}
+
+function lotAt(i, j, side, k) {
+  const [nx, nz] = LOT_NORMALS[side];
+  return {
+    key: `${i},${j},${side},${k}`, cell: cellKey(i, j),
+    nx, nz, fx: nx ? i * CELL + nx * FRONTAGE : k, fz: nx ? k : j * CELL + nz * FRONTAGE,
+  };
 }
 
 function lotBox({ nx, nz, fx, fz }, [w, d]) {
@@ -5063,18 +5069,22 @@ function lotBox({ nx, nz, fx, fz }, [w, d]) {
   return { minX: cx - hx, maxX: cx + hx, minZ: cz - hz, maxZ: cz + hz };
 }
 
+// On a road, sidewalk, walk or rail cell.
+function onStreet(b, rects) {
+  for (let i = Math.round(b.minX / CELL); i <= Math.round(b.maxX / CELL); i++) {
+    for (let j = Math.round(b.minZ / CELL); j <= Math.round(b.maxZ / CELL); j++) {
+      if (tiles.has(cellKey(i, j)) || railCells.has(cellKey(i, j))) return true;
+    }
+  }
+  return rects.some(({ r }) => overlaps(b, { minX: r[0], minZ: r[1], maxX: r[2], maxZ: r[3] }));
+}
+
 // Nothing in the way but the level's trees, and at least a cell inside the map.
 function lotFree(box, rects, trees) {
   const b = { minX: box.minX + 0.02, maxX: box.maxX - 0.02, minZ: box.minZ + 0.02, maxZ: box.maxZ - 0.02 };
   const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
   if (b.minX < (iMin + 0.5) * CELL || b.maxX > (iMax - 0.5) * CELL || b.minZ < (jMin + 0.5) * CELL || b.maxZ > (jMax - 0.5) * CELL) return false;
-  for (let i = Math.round(b.minX / CELL); i <= Math.round(b.maxX / CELL); i++) {
-    for (let j = Math.round(b.minZ / CELL); j <= Math.round(b.maxZ / CELL); j++) {
-      if (tiles.has(cellKey(i, j)) || railCells.has(cellKey(i, j))) return false;
-    }
-  }
-  if (rects.some(({ r }) => overlaps(b, { minX: r[0], minZ: r[1], maxX: r[2], maxZ: r[3] }))) return false;
-  if (solids.some(s => overlaps(b, s))) return false;
+  if (onStreet(b, rects) || solids.some(s => overlaps(b, s))) return false;
   return !posts.some(p => !trees.has(p) && overlaps(b, postBox(p)));
 }
 
@@ -5095,6 +5105,18 @@ function homeCount() {
   }
   return n;
 }
+
+// Every standing shop: the level's, added, facility and grown ones.
+function shopPositions() {
+  const out = [];
+  for (const item of editables.values()) {
+    if (item === placing || item.removed) continue;
+    if (levelShopIds.has(item.id) || item.add?.type === 'shop' || item.add?.kind === 'shop') out.push(item.pivot.position);
+  }
+  return out;
+}
+
+const shopCount = () => shopPositions().length;
 
 function growthContext(stops) {
   const facilities = [];
@@ -5138,30 +5160,58 @@ function drawLot(pool) {
 }
 
 // Puts an added building on a lot, front on the lot's front edge, facing the road.
-async function buildOnLot(id, lot, add) {
+// Puts an added building on a lot, front on the lot's front edge, facing the
+// road; null if it would touch the street or another building (`replacing`
+// is one that is about to go).
+async function buildOnLot(id, lot, add, rects, replacing = null) {
   const item = await buildAdded(id, add);
   const depth = item.places[0].at.z - 0.05; // pivot to front face
   applyState(item, { x: lot.fx + lot.nx * depth, z: lot.fz + lot.nz * depth, rot: Math.atan2(-lot.nx, -lot.nz), removed: false });
-  const own = new Set(item.solids.map(({ s }) => s));
-  if (item.solids.some(({ s }) => solids.some(o => !own.has(o) && overlaps(s, o)))) {
+  const own = new Set([...item.solids, ...(replacing?.solids ?? [])].map(({ s }) => s));
+  if (item.solids.some(({ s }) => onStreet(s, rects) || solids.some(o => !own.has(o) && overlaps(s, o)))) {
     discard(item);
     return null;
   }
   return item;
 }
 
-async function growTown(stops) {
-  if (!LEVEL.atrain || !p2State.growth.on || growBusy) return;
-  const quota = Math.min(GROWTH_SPEEDS[p2State.growth.speed], 300 - homeCount());
-  if (quota <= 0) return;
-  growBusy = true;
-  const day = p2State.day;
-  const rects = sidewalkRects();
+// One grown town house a day becomes a small apartment once it is five days
+// old and near the station or among shops.
+async function upgradeHouse(ctx, rects) {
+  const shops = shopPositions();
+  const near = (p, q, cells) => Math.hypot(p.x - q.x, p.z - q.z) <= cells * CELL;
+  const houses = [...editables.values()].filter(item => !item.removed && item.add?.auto && item.add.type === 'house'
+    && p2State.day - item.add.born >= 5
+    && (near(item.pivot.position, ctx.station, 12) || shops.filter(q => near(item.pivot.position, q, 6)).length >= 3));
+  if (!houses.length) return false;
+  const house = randomOf(houses);
+  const { lot, born } = house.add;
+  const apt = await buildOnLot(`${house.id}-up`, lotAt(...lot.split(',').map(Number)),
+    { type: 'facility', kind: 'smallApartment', model: 'building-m', auto: true, lot, born }, rects, house);
+  if (!apt) return false;
+  applyState(house, { ...stateOf(house), removed: true });
+  return true;
+}
+
+// Today's buildings: first a shop when there are too few for the homes, then
+// houses near the station and villas further out.
+function planGrowth(quota, ctx, rects) {
   const trees = levelTreePosts();
-  const ctx = growthContext(stops);
   const pool = scoredLots(ctx, rects, trees);
   const taken = [];
   const plans = [];
+  const shops = shopPositions();
+  if (homeCount() > 12 * shops.length) {
+    const spaced = pool.filter(lot => lot.score >= 7 && !shops.some(p =>
+      Math.abs(lot.nx ? p.z - lot.z : p.x - lot.x) <= 3 && Math.abs(lot.nx ? p.x - lot.x : p.z - lot.z) <= 1));
+    if (spaced.length) {
+      const lot = drawLot(spaced);
+      pool.splice(pool.indexOf(lot), 1);
+      taken.push(lotBox(lot, HOUSE_LOT));
+      plans.push({ lot, add: { type: 'shop', model: randomOf(GROW_SHOPS), name: randomOf(SHOP_NAMES),
+        theme: Math.floor(Math.random() * SHOP_THEMES.length), wall: -1 } });
+    }
+  }
   while (plans.length < quota && pool.length) {
     const lot = drawLot(pool);
     const near = Math.hypot(lot.x - ctx.station.x, lot.z - ctx.station.z) <= 15 * CELL;
@@ -5172,8 +5222,20 @@ async function growTown(stops) {
       ? { type: 'house', model: randomOf(GROW_HOUSES), wall: Math.floor(Math.random() * WALLS.length) - 1 }
       : { type: 'villa', model: randomOf(GROW_VILLAS), wall: Math.floor(Math.random() * VILLA_WALLS.length), roof: Math.floor(Math.random() * VILLA_ROOFS.length) } });
   }
+  return plans;
+}
+
+async function growTown(stops) {
+  if (!LEVEL.atrain || !p2State.growth.on || growBusy) return;
+  growBusy = true;
+  const day = p2State.day;
+  const rects = sidewalkRects();
+  const ctx = growthContext(stops);
+  const upgraded = await upgradeHouse(ctx, rects);
+  const quota = Math.min(GROWTH_SPEEDS[p2State.growth.speed], 300 - homeCount());
+  const plans = quota > 0 ? planGrowth(quota, ctx, rects) : [];
   const built = (await Promise.all(plans.map(({ lot, add }, n) =>
-    buildOnLot(`grow:${day}-${n + 1}`, lot, { ...add, auto: true, lot: lot.key, born: day })))).filter(Boolean);
+    buildOnLot(`grow:${day}-${n + 1}`, lot, { ...add, auto: true, lot: lot.key, born: day }, rects)))).filter(Boolean);
   for (const item of built) {
     const box = item.solids[0].s;
     for (const tree of editables.values()) {
@@ -5185,14 +5247,16 @@ async function growTown(stops) {
     growing.push({ pivot: item.pivot, t: 0 });
   }
   growBusy = false;
-  if (!built.length) return;
+  if (!built.length && !upgraded) return;
   settleTown();
   saveLayout();
-  showToast(`新住宅落成 ×${built.length}`, () => {
-    const p = built[0].pivot.position;
-    camera.position.add(new THREE.Vector3(p.x - controls.target.x, 0, p.z - controls.target.z));
-    controls.target.set(p.x, controls.target.y, p.z);
-  });
+  if (built.length) {
+    showToast(`新住宅落成 ×${built.length}`, () => {
+      const p = built[0].pivot.position;
+      camera.position.add(new THREE.Vector3(p.x - controls.target.x, 0, p.z - controls.target.z));
+      controls.target.set(p.x, controls.target.y, p.z);
+    });
+  }
 }
 
 // New houses rise out of the ground over 0.6 s; at once when skipping time.

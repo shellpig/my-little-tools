@@ -136,6 +136,17 @@ export const FACILITIES = {
     pop: 40,
     daily: 3,
   },
+  smallApartment: {
+    name: '小公寓',
+    group: 'earn',
+    pack: 'commercial',
+    models: ['building-m'],
+    scale: 0.75,
+    price: 0,
+    pop: 15,
+    daily: 0,
+    buyable: false,
+  },
   shop: {
     name: '商店',
     group: 'earn',
@@ -226,6 +237,10 @@ export const FACILITIES = {
 
 export const GROWTH_SPEEDS = { slow: 1, normal: 2, fast: 4 };
 export const GROWTH_MIN_SCORE = 5;
+export const SHOP_NAMES = [
+  '早餐店', '豆花', '文具行', '雜貨店', '手搖飲', '麵店',
+  '書店', '花店', '洗衣店', '水果行', '五金行', '照相館',
+];
 
 export function createDefaultP2() {
   return {
