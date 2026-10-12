@@ -29,7 +29,7 @@
 三項都完成才派工：
 
 1. **文件讀清楚**：`PROJECT_BRIEF.md` → 本檔 §1、§2、§5、§7 與所選 worker 段落 → 當前 Phase 三份文件中該 Subphase 的所有對應段（實作規格的完成條件、開發設計方針的接線、測試指南的必測項）→ 前一個 Subphase 的實作紀錄接手摘要（若有）。不可只讀 brief 或只讀 step 檔就派工。
-2. **疑點先拍板**：契約之間矛盾、缺數值、範圍不清的地方列給使用者，拍板前不派工；指揮者不自行改 Phase 文件（verifier 職權）。
+2. **疑點由指揮者裁定**：契約之間矛盾、缺數值、範圍不清的地方，指揮者自己裁定，寫進 step 檔「指揮者裁定的契約疑點」，prompt 指向該段，不另問使用者。只有會改變玩法意圖或推翻已拍板決定的才問使用者。指揮者不改 Phase 三份文件（verifier 職權）。
 3. **開分支**：從最新 main 開 `feat/small-town-<subphase 小寫>`（例：`feat/small-town-p2-a`），整個 Subphase 的 commit 都在此分支。ChatGPT／網頁版 Muse 需要 remote branch，經使用者同意後 push 到 origin。起始 commit 與分支名寫進實作紀錄接手摘要。
 
 Subphase 收尾：所有 step 驗證完成、使用者同意後，merge 回 main 並 push；PROJECT_BRIEF.md 的 Subphase 狀態同步更新。
