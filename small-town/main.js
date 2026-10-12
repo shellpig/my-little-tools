@@ -1492,9 +1492,10 @@ class Walker extends Person {
     const home = this.rank >= activity;
     if (this.state === 'away') {
       if (home) return;
-      const doors = [...PLACES.values()];
+      const doors = LEVEL.atrain ? destinations() : [...PLACES.values()];
       const door = doors[Math.floor(Math.random() * doors.length)]?.door;
-      if (door) p.set(door.x, 0.05, door.z);
+      if (!door) return;
+      p.set(door.x, 0.05, door.z);
       this.obj.visible = true;
       this.state = 'walking';
       this.pts = null;
@@ -1509,13 +1510,9 @@ class Walker extends Person {
         }
         let best = null;
         let bestD = Infinity;
-        for (const pl of PLACES.values()) {
+        for (const pl of LEVEL.atrain ? destinations() : [...PLACES.values(), ...homeDoors]) {
           const d = Math.hypot(pl.door.x - p.x, pl.door.z - p.z);
           if (d < bestD) [best, bestD] = [pl.door, d];
-        }
-        for (const h of homeDoors) {
-          const d = Math.hypot(h.door.x - p.x, h.door.z - p.z);
-          if (d < bestD) [best, bestD] = [h.door, d];
         }
         const r = best && findRoutePos(p, best.x, best.z, 0.5);
         if (r && r.pts.length > 1) {
@@ -1861,19 +1858,32 @@ class Commuter extends Passenger {
   }
 }
 
-// A random shop, civic building, hotel or home that is still standing.
+// Doorways in the town that walkers and commuters can head to: shops, civic
+// buildings, hotel and homes from the level, plus added houses, villas,
+// shops and facilities. Excludes removed items and unreachable doors.
+function destinations() {
+  const list = [...SHOPS, ...CIVIC, ...(HOTEL ? [HOTEL] : [])].map(b => PLACES.get(b.name)).concat(homeDoors);
+  for (const item of editables.values()) {
+    if (!item.add || item === placing) continue;
+    for (const { pl } of item.places) list.push(pl);
+  }
+  return list.filter(pl => !pl.removed && snapDoor(pl.door.x, pl.door.z) !== null);
+}
+
+// A random doorway picked from destinations, or null if none are reachable.
 function commuterDoor() {
-  const doors = [...SHOPS, ...CIVIC, ...(HOTEL ? [HOTEL] : [])].map(b => PLACES.get(b.name))
-    .concat(homeDoors).filter(pl => !pl.removed);
-  return doors[Math.floor(Math.random() * doors.length)].door;
+  const list = destinations();
+  if (!list.length) return null;
+  return list[Math.floor(Math.random() * list.length)].door;
 }
 
 function spawnCommuter(fromStation, delay) {
   if (walkers.filter(w => w instanceof Commuter && !w.done).length >= LEVEL.commuters) return;
   const station = PLACES.get(STATION.name);
   if (station.removed) return;
-  const gltf = peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
   const door = commuterDoor();
+  if (!door) return;
+  const gltf = peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
   walkers.push(fromStation ? new Commuter(gltf, station.door, door, delay) : new Commuter(gltf, door, station.door, delay));
 }
 
@@ -4214,29 +4224,35 @@ let placingTicket = null;
 let pointerFloor = null;
 const addChoice = { type: 'house', wall: -1, villaWall: 0, roof: 0, theme: 0, facilityKind: 'apartment' };
 
+// A door just outside the middle of the front (+z) face, while still at the origin.
+function frontDoor(parts) {
+  const box = new THREE.Box3();
+  for (const part of parts) box.expandByObject(part);
+  return { door: new THREE.Vector3(0, 0.05, box.max.z + 0.05) };
+}
+
 // Built at the origin facing +z; its pivot then carries it into place.
 async function buildAdded(id, add) {
   let item;
   if (add.type === 'facility') {
     const fac = FACILITIES[add.kind];
+    let parts, solids = [], isCommercialEarn = false, mat;
     if (fac.compose === 'park') {
-      const parts = [
+      parts = [
         await place('nature', 'path_stoneCircle', { scale: 1.3 }),
         await place('nature', 'tree_default', { x: -0.42, z: -0.42, scale: 0.6 }),
         await place('nature', 'tree_default', { x: 0.42, z: -0.40, scale: 0.55, rot: 1.5 }),
         await place('nature', 'tree_default', { x: 0.05, z: 0.45, scale: 0.65, rot: 3.0 }),
       ];
-      item = editable(id, parts);
     } else if (fac.compose === 'camp') {
-      const parts = [
+      parts = [
         await place('nature', 'campfire_stones', { scale: 0.75 }),
         await place('nature', 'tent_detailedOpen', { x: -0.3, z: 0.35, rot: -0.4, scale: 0.8 }),
         await place('nature', 'tent_smallOpen', { x: 0.35, z: -0.35, rot: 2.5, scale: 0.85 }),
       ];
-      item = editable(id, parts);
     } else if (fac.compose === 'farm') {
       const cropModel = add.model || 'crops_cornStageD';
-      const parts = [
+      parts = [
         await place('nature', 'crops_dirtDoubleRow', { scale: 1.35 }),
         await place('nature', cropModel, { x: -0.35, z: -0.25 }),
         await place('nature', cropModel, { x: 0, z: -0.25 }),
@@ -4245,19 +4261,19 @@ async function buildAdded(id, add) {
         await place('nature', cropModel, { x: 0, z: 0.25 }),
         await place('nature', cropModel, { x: 0.35, z: 0.25 }),
       ];
-      item = editable(id, parts);
     } else {
-      const isCommercialEarn = fac.group === 'earn' && fac.pack === 'commercial';
-      let mat;
+      isCommercialEarn = fac.group === 'earn' && fac.pack === 'commercial';
       if (isCommercialEarn) {
         const walls = add.wall >= 0 ? kit.pastels[add.wall] : kit.commercial;
         mat = paletteMaterial(walls, [1.4, 0.7, 2.2][Math.floor(Math.random() * 3)],
           (21.5 + Math.random() * 5) % 24, Math.random() * 0.15);
       }
       const obj = solidOf(await place(fac.pack, add.model, { scale: fac.scale, mat }));
-      item = editable(id, [obj], { solids: [obj.userData.solid] });
-      if (isCommercialEarn) paintable(item, mat, false);
+      parts = [obj];
+      solids = [obj.userData.solid];
     }
+    item = editable(id, parts, { solids, places: [frontDoor(parts)] });
+    if (isCommercialEarn) paintable(item, mat, false);
   } else if (add.type === 'tree') {
     const c = collect(() => post(0, 0, 0.1));
     const obj = await place('suburban', add.model, { scale: 1.25, mat: kit.plantMat });
@@ -4275,7 +4291,8 @@ async function buildAdded(id, add) {
     const c = add.type === 'shop'
       ? collect(() => decorateShop(obj, { x: 0, facing: 1, name: add.name, ...SHOP_THEMES[add.theme], closes: 22 }))
       : { parts: [] };
-    item = editable(id, [obj, ...c.parts], { solids: [obj.userData.solid] });
+    const parts = [obj, ...c.parts];
+    item = editable(id, parts, { solids: [obj.userData.solid], places: [frontDoor(parts)] });
     paintable(item, mat, villa);
   }
   item.add = add;
