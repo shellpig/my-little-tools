@@ -16,7 +16,8 @@ import { buildRail, RAIL_TOP } from './rail.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
   BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY, FACILITIES,
-  normalizeP2, validateTimetable, canAssignTrain, POP, settle
+  normalizeP2, validateTimetable, canAssignTrain, POP, settle,
+  lotScore, GROWTH_SPEEDS, GROWTH_MIN_SCORE
 } from './atrain.js';
 
 const BUS_COLOR_LABELS = {
@@ -2724,13 +2725,19 @@ function updateUI() {
 }
 
 let toastTimer = 0;
-function showToast(text) {
+let toastAction = null;
+// A click on the toast runs `onclick` while it is showing.
+function showToast(text, onclick = null) {
   const el = $('toast');
   if (!el) return;
   el.textContent = text;
+  toastAction = onclick;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 2000);
+  toastTimer = setTimeout(() => {
+    el.hidden = true;
+    toastAction = null;
+  }, 2000);
 }
 
 function updateMoneyUI() {
@@ -2819,6 +2826,7 @@ function advanceClock(deltaMinutes) {
       if (p2State.ledger.length > 7) {
         p2State.ledger.splice(0, p2State.ledger.length - 7);
       }
+      growTown(dailyCounts.stops.length);
       dailyCounts.stops = [];
       dailyCounts.passes = 0;
       dailyCounts.runs = 0;
@@ -5012,6 +5020,191 @@ $('edit-reset').addEventListener('click', () => {
   switchGame(LEVEL.id, {});
 });
 
+// ---------- town growth (P2-D) ----------
+
+// Each morning a few houses go up along the roads. Lots sit behind every
+// sidewalk edge, one per whole world unit along the street, the front on the
+// sidewalk's outer edge. The level's own trees are cleared; anything else in
+// the way blocks the lot.
+const HOUSE_LOT = [1.0, 1.2]; // width along the street, depth
+const VILLA_LOT = [1.5, 1.3];
+const GROW_HOUSES = ['building-b', 'building-d', 'building-f', 'building-g'];
+const GROW_VILLAS = ['building-type-a', 'building-type-c', 'building-type-e', 'building-type-g'];
+const LOT_NORMALS = { [NORTH]: [0, -1], [SOUTH]: [0, 1], [EAST]: [1, 0], [WEST]: [-1, 0] };
+const growing = []; // { pivot, t } rising out of the ground
+let growBusy = false;
+
+const overlaps = (a, b) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
+const postBox = p => ({ minX: p.x - p.r, maxX: p.x + p.r, minZ: p.z - p.r, maxZ: p.z + p.r });
+const randomOf = list => list[Math.floor(Math.random() * list.length)];
+
+// Every lot along the current roads: the middle of its front edge and the
+// way out from the road.
+function allLots(rects) {
+  const lots = [];
+  for (const { side, x, z } of rects) {
+    if (!side) continue;
+    const [nx, nz] = LOT_NORMALS[side];
+    const [i, j] = [Math.round(x / CELL), Math.round(z / CELL)];
+    const along = nx ? z : x;
+    for (let k = Math.ceil(along - CELL / 2); k < along + CELL / 2; k++) {
+      lots.push({
+        key: `${i},${j},${side},${k}`, cell: cellKey(i, j),
+        nx, nz, fx: nx ? x + nx * FRONTAGE : k, fz: nx ? k : z + nz * FRONTAGE,
+      });
+    }
+  }
+  return lots;
+}
+
+function lotBox({ nx, nz, fx, fz }, [w, d]) {
+  const [cx, cz] = [fx + nx * d / 2, fz + nz * d / 2];
+  const [hx, hz] = nx ? [d / 2, w / 2] : [w / 2, d / 2];
+  return { minX: cx - hx, maxX: cx + hx, minZ: cz - hz, maxZ: cz + hz };
+}
+
+// Nothing in the way but the level's trees, and at least a cell inside the map.
+function lotFree(box, rects, trees) {
+  const b = { minX: box.minX + 0.02, maxX: box.maxX - 0.02, minZ: box.minZ + 0.02, maxZ: box.maxZ - 0.02 };
+  const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
+  if (b.minX < (iMin + 0.5) * CELL || b.maxX > (iMax - 0.5) * CELL || b.minZ < (jMin + 0.5) * CELL || b.maxZ > (jMax - 0.5) * CELL) return false;
+  for (let i = Math.round(b.minX / CELL); i <= Math.round(b.maxX / CELL); i++) {
+    for (let j = Math.round(b.minZ / CELL); j <= Math.round(b.maxZ / CELL); j++) {
+      if (tiles.has(cellKey(i, j)) || railCells.has(cellKey(i, j))) return false;
+    }
+  }
+  if (rects.some(({ r }) => overlaps(b, { minX: r[0], minZ: r[1], maxX: r[2], maxZ: r[3] }))) return false;
+  if (solids.some(s => overlaps(b, s))) return false;
+  return !posts.some(p => !trees.has(p) && overlaps(b, postBox(p)));
+}
+
+// Posts of the level's own trees, which growth may clear.
+function levelTreePosts() {
+  const set = new Set();
+  for (const item of editables.values()) {
+    if (!item.removed && item.id.startsWith('tree:')) for (const { p } of item.posts) set.add(p);
+  }
+  return set;
+}
+
+function homeCount() {
+  let n = 0;
+  for (const item of editables.values()) {
+    if (item === placing || item.removed) continue;
+    if (item.id.startsWith('home:') || item.add?.type === 'house' || item.add?.type === 'villa' || item.add?.kind === 'smallApartment') n++;
+  }
+  return n;
+}
+
+function growthContext(stops) {
+  const facilities = [];
+  for (const item of editables.values()) {
+    if (item === placing || item.removed || item.add?.type !== 'facility') continue;
+    const { radius, growth } = FACILITIES[item.add.kind];
+    if (growth && facilityLinked(item)) facilities.push({ x: item.pivot.position.x, z: item.pivot.position.z, radius, growth });
+  }
+  return {
+    cell: CELL, station: editables.get('station').pivot.position, stops,
+    busCells: p2State.buses.length && busRoute ? new Set(busRoute) : null, facilities,
+  };
+}
+
+// Up to 50 free lots, scored; only those good enough to build on.
+function scoredLots(ctx, rects, trees) {
+  const lots = allLots(rects);
+  for (let i = lots.length; i-- > 1;) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [lots[i], lots[j]] = [lots[j], lots[i]];
+  }
+  const out = [];
+  for (const lot of lots) {
+    if (out.length === 50) break;
+    if (p2State.day <= p2State.growth.cooldown[lot.key]) continue;
+    const box = lotBox(lot, HOUSE_LOT);
+    if (!lotFree(box, rects, trees)) continue;
+    const beside = lot.nx ? { ...box, minZ: box.minZ - 1, maxZ: box.maxZ + 1 } : { ...box, minX: box.minX - 1, maxX: box.maxX + 1 };
+    const x = (box.minX + box.maxX) / 2;
+    const z = (box.minZ + box.maxZ) / 2;
+    out.push({ ...lot, x, z, score: lotScore({ x, z, cell: lot.cell, neighbour: solids.some(s => overlaps(beside, s)) }, ctx) });
+  }
+  return out.filter(lot => lot.score >= GROWTH_MIN_SCORE);
+}
+
+// Draws one lot weighted by score and takes it out of the pool.
+function drawLot(pool) {
+  let r = Math.random() * pool.reduce((sum, lot) => sum + lot.score, 0);
+  const i = pool.findIndex(lot => (r -= lot.score) < 0);
+  return pool.splice(i < 0 ? pool.length - 1 : i, 1)[0];
+}
+
+// Puts an added building on a lot, front on the lot's front edge, facing the road.
+async function buildOnLot(id, lot, add) {
+  const item = await buildAdded(id, add);
+  const depth = item.places[0].at.z - 0.05; // pivot to front face
+  applyState(item, { x: lot.fx + lot.nx * depth, z: lot.fz + lot.nz * depth, rot: Math.atan2(-lot.nx, -lot.nz), removed: false });
+  const own = new Set(item.solids.map(({ s }) => s));
+  if (item.solids.some(({ s }) => solids.some(o => !own.has(o) && overlaps(s, o)))) {
+    discard(item);
+    return null;
+  }
+  return item;
+}
+
+async function growTown(stops) {
+  if (!LEVEL.atrain || !p2State.growth.on || growBusy) return;
+  const quota = Math.min(GROWTH_SPEEDS[p2State.growth.speed], 300 - homeCount());
+  if (quota <= 0) return;
+  growBusy = true;
+  const day = p2State.day;
+  const rects = sidewalkRects();
+  const trees = levelTreePosts();
+  const ctx = growthContext(stops);
+  const pool = scoredLots(ctx, rects, trees);
+  const taken = [];
+  const plans = [];
+  while (plans.length < quota && pool.length) {
+    const lot = drawLot(pool);
+    const near = Math.hypot(lot.x - ctx.station.x, lot.z - ctx.station.z) <= 15 * CELL;
+    const box = lotBox(lot, near ? HOUSE_LOT : VILLA_LOT);
+    if (taken.some(b => overlaps(b, box)) || (!near && !lotFree(box, rects, trees))) continue;
+    taken.push(box);
+    plans.push({ lot, add: near
+      ? { type: 'house', model: randomOf(GROW_HOUSES), wall: Math.floor(Math.random() * WALLS.length) - 1 }
+      : { type: 'villa', model: randomOf(GROW_VILLAS), wall: Math.floor(Math.random() * VILLA_WALLS.length), roof: Math.floor(Math.random() * VILLA_ROOFS.length) } });
+  }
+  const built = (await Promise.all(plans.map(({ lot, add }, n) =>
+    buildOnLot(`grow:${day}-${n + 1}`, lot, { ...add, auto: true, lot: lot.key, born: day })))).filter(Boolean);
+  for (const item of built) {
+    const box = item.solids[0].s;
+    for (const tree of editables.values()) {
+      if (!tree.removed && tree.id.startsWith('tree:') && tree.posts.some(({ p }) => overlaps(box, postBox(p)))) {
+        applyState(tree, { ...stateOf(tree), removed: true });
+      }
+    }
+    item.pivot.scale.y = 0;
+    growing.push({ pivot: item.pivot, t: 0 });
+  }
+  growBusy = false;
+  if (!built.length) return;
+  settleTown();
+  saveLayout();
+  showToast(`新住宅落成 ×${built.length}`, () => {
+    const p = built[0].pivot.position;
+    camera.position.add(new THREE.Vector3(p.x - controls.target.x, 0, p.z - controls.target.z));
+    controls.target.set(p.x, controls.target.y, p.z);
+  });
+}
+
+// New houses rise out of the ground over 0.6 s; at once when skipping time.
+function updateGrowing(dt) {
+  for (let i = growing.length; i--;) {
+    const g = growing[i];
+    g.t = skipModeActive ? 0.6 : g.t + dt;
+    g.pivot.scale.y = Math.min(1, g.t / 0.6);
+    if (g.t >= 0.6) growing.splice(i, 1);
+  }
+}
+
 // ---------- main loop ----------
 
 const clock = new THREE.Clock();
@@ -5081,6 +5274,7 @@ function frame() {
   if (wishes) wishes.update(dt);
   updatePlayer(dt);
   updateTalk(dt);
+  updateGrowing(dt);
   controls.update();
   updateUI();
   composer.render();
@@ -5104,6 +5298,8 @@ function setupOpsPanel() {
   $('toast')?.addEventListener('click', () => {
     clearTimeout(toastTimer);
     $('toast').hidden = true;
+    toastAction?.();
+    toastAction = null;
   });
 
   const opsBtn = $('ops');
