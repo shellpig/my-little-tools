@@ -7,7 +7,7 @@
 - 分支：`feat/small-town-p2-e`，從 main `8d8c007`（P2-D 已合入）開出；完成後 merge 回 main。
 - 指揮者：Claude Code；實作者：agy / Gemini 3.8 Flash (High)；本機工作樹直接改程式，不得 git 寫入。
 - 拆法：依讀取範圍拆四步（handbook §2.1）。E1 只碰經營面板「小鎮」分頁；E2 只碰點擊／滑鼠與車站標籤；E3 只碰鈴聲與標題列；E4 只碰列車點選與鏡頭（選做）。Closeout（最終流程、第 1 關回歸、brief）由指揮者做。
-- 結果：E1～E4 與 Closeout 驗證通過，P2-E 完成；待使用者同意後 merge 回 main 並 push。
+- 結果：E1～E4 與 Closeout 驗證通過，P2-E 完成，已 merge 回 main 並 push。
 - 已知小問題：買車後清單要等模型載入才出現新車（P2-A 既有）；鈴聲需先有使用者手勢；折線標籤無千分位。
 - 契約：本目錄實作規格、開發設計方針、測試指南的 P2-E 段；契約疑點由指揮者裁定，記在各 step 檔。
 - prompt 與輸出：`C:\_work\AI_Work\Tools\agy-runs\agy-small-town-P2-E*.*`。
