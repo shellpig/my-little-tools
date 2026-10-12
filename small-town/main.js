@@ -2764,6 +2764,9 @@ function population() {
     if (item.add) {
       if (item.add.type === 'house') count += POP.house;
       else if (item.add.type === 'villa') count += POP.villa;
+      else if (item.add.type === 'facility' && facilityLinked(item)) {
+        count += FACILITIES[item.add.kind].pop ?? 0;
+      }
     } else if (item.id.startsWith('home:')) {
       const idx = Number(item.id.slice(5));
       const home = HOMES[idx];
@@ -2771,6 +2774,17 @@ function population() {
     }
   }
   return count;
+}
+
+function linkedFacilityKinds() {
+  const kinds = [];
+  for (const item of editables.values()) {
+    if (item === placing || item.removed) continue;
+    if (item.add?.type === 'facility' && facilityLinked(item)) {
+      kinds.push(item.add.kind);
+    }
+  }
+  return kinds;
 }
 
 function advanceClock(deltaMinutes) {
@@ -2787,7 +2801,7 @@ function advanceClock(deltaMinutes) {
     nextSettlementMinute += 1440;
     if (rail) rail.onSettlement(opsDay);
     if (p2State) {
-      const entry = settle(p2State, dailyCounts, population());
+      const entry = settle(p2State, dailyCounts, population(), linkedFacilityKinds());
       if (!p2State.unlimited) {
         p2State.money = entry.balance;
       }
@@ -3845,6 +3859,82 @@ function footprintOf(item) {
   return rects;
 }
 
+function facilityBounds(item) {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  if (item.solids && item.solids.length > 0) {
+    for (const { a, b } of item.solids) {
+      minX = Math.min(minX, a.x, b.x);
+      maxX = Math.max(maxX, a.x, b.x);
+      minZ = Math.min(minZ, a.z, b.z);
+      maxZ = Math.max(maxZ, a.z, b.z);
+    }
+  } else {
+    const inv = new THREE.Matrix4().copy(item.pivot.matrixWorld).invert();
+    const rel = new THREE.Matrix4();
+    const v = new THREE.Vector3();
+    item.pivot.traverse(o => {
+      if (o.isMesh && o.geometry) {
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        const gb = o.geometry.boundingBox;
+        rel.multiplyMatrices(inv, o.matrixWorld);
+        for (let ix = 0; ix < 2; ix++) {
+          for (let iy = 0; iy < 2; iy++) {
+            for (let iz = 0; iz < 2; iz++) {
+              v.set(ix ? gb.max.x : gb.min.x, iy ? gb.max.y : gb.min.y, iz ? gb.max.z : gb.min.z);
+              v.applyMatrix4(rel);
+              minX = Math.min(minX, v.x);
+              maxX = Math.max(maxX, v.x);
+              minZ = Math.min(minZ, v.z);
+              maxZ = Math.max(maxZ, v.z);
+            }
+          }
+        }
+      }
+    });
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
+// Front edge = the pivot's +z side of the footprint, distance to any sidewalkRects() <= 0.3.
+function facilityLinked(item) {
+  item.pivot.updateMatrixWorld(true);
+  const bounds = facilityBounds(item);
+  const p1 = item.pivot.localToWorld(new THREE.Vector3(bounds.minX, 0, bounds.maxZ));
+  const p2 = item.pivot.localToWorld(new THREE.Vector3(bounds.maxX, 0, bounds.maxZ));
+  // Turns are quarter turns, so the front edge is axis-aligned: its distance
+  // to a sidewalk is the gap between the two boxes.
+  const [x0, x1, z0, z1] = [Math.min(p1.x, p2.x), Math.max(p1.x, p2.x), Math.min(p1.z, p2.z), Math.max(p1.z, p2.z)];
+  return sidewalkRects().some(({ r }) => {
+    const dx = Math.max(0, Math.min(r[0], r[2]) - x1, x0 - Math.max(r[0], r[2]));
+    const dz = Math.max(0, Math.min(r[1], r[3]) - z1, z0 - Math.max(r[1], r[3]));
+    return Math.hypot(dx, dz) <= 0.3;
+  });
+}
+
+const radiusGeo = new THREE.CircleGeometry(1, 48);
+radiusGeo.rotateX(-Math.PI / 2);
+const radiusMark = new THREE.Mesh(radiusGeo,
+  new THREE.MeshBasicMaterial({ color: 0x2ec866, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }));
+radiusMark.position.y = 0.06;
+radiusMark.visible = false;
+radiusMark.raycast = () => {};
+scene.add(radiusMark);
+
+function updateFacilityRadius() {
+  const item = (placing && !placing.removed) ? placing : (selected && !selected.removed) ? selected : null;
+  const fac = item?.add?.type === 'facility' ? FACILITIES[item.add.kind] : null;
+  if (!item || !fac || !fac.radius) {
+    radiusMark.visible = false;
+    return;
+  }
+  const rWorld = fac.radius * CELL;
+  radiusMark.scale.set(rWorld, 1, rWorld);
+  radiusMark.position.set(item.pivot.position.x, 0.06, item.pivot.position.z);
+  const linked = facilityLinked(item);
+  radiusMark.material.color.setHex(linked ? 0x2ec866 : 0xff5a5a);
+  radiusMark.visible = true;
+}
+
 // After a building moves, only the cats sitting on its old or new footprint
 // need a new height: a cat on a moved-away roof drops to what is below, and
 // a building put down over a cat lifts it onto the roof. Paving never comes
@@ -3927,6 +4017,10 @@ function select(item) {
   outline.visible = !!item;
   if (item) hug(item);
   renderPaintPanel();
+  updateFacilityRadius();
+  if (item && item !== placing && !item.removed && item.add?.type === 'facility' && !facilityLinked(item)) {
+    showToast('沒有接到道路');
+  }
 }
 
 // The colours of the selected house, shop or villa, in a panel of its own
@@ -4031,6 +4125,7 @@ addEventListener('pointermove', e => {
   if (placing) {
     applyState(placing, { ...stateOf(placing), x: Math.round(at.x / SNAP) * SNAP, z: Math.round(at.z / SNAP) * SNAP });
     hug(placing);
+    updateFacilityRadius();
     return;
   }
   if (!drag?.item) return;
@@ -4041,6 +4136,7 @@ addEventListener('pointermove', e => {
   drag.moved = true;
   applyState(drag.item, { ...stateOf(drag.item), x, z });
   hug(drag.item);
+  updateFacilityRadius();
 });
 addEventListener('pointerup', e => {
   if (stroke) endStroke();
@@ -4064,6 +4160,7 @@ addEventListener('keydown', e => {
     if (e.code === 'KeyR' && !e.repeat) {
       applyState(placing, { ...stateOf(placing), rot: (placing.pivot.rotation.y + Math.PI / 2) % (Math.PI * 2) });
       hug(placing);
+      updateFacilityRadius();
     }
     if (e.code === 'Escape' || ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ')) cancelPlacing();
     return;
@@ -4707,6 +4804,7 @@ function takeShot() {
   const prev = renderer.getRenderTarget();
   const outlineWas = outline.visible;
   const brushWas = brushMark.visible;
+  const radiusWas = radiusMark.visible;
   const placingWas = placing ? placing.pivot.visible : false;
   const snap = new THREE.PerspectiveCamera(45, W / H, 0.1, 200);
   const [tx, ty, tz] = LEVEL.camera.target;
@@ -4717,6 +4815,7 @@ function takeShot() {
   try {
     outline.visible = false;
     brushMark.visible = false;
+    radiusMark.visible = false;
     if (placing) placing.pivot.visible = false;
     renderer.setRenderTarget(rt);
     renderer.render(scene, snap);
@@ -4733,6 +4832,7 @@ function takeShot() {
   } finally {
     outline.visible = outlineWas;
     brushMark.visible = brushWas;
+    radiusMark.visible = radiusWas;
     if (placing) placing.pivot.visible = placingWas;
     renderer.setRenderTarget(prev);
     rt.dispose();

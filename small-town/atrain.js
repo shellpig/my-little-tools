@@ -277,7 +277,7 @@ export const POP = { house: 4, villa: 3 };
 
 // One day's ledger entry; the caller applies `balance` unless unlimited.
 // Riders per stop are capped by seats, which keeps fare = riders / 4.
-export function settle(state, counts, pop) {
+export function settle(state, counts, pop, kinds = []) {
   let rail = counts.passes * 15;
   let riders = 0;
   for (const type of counts.stops) {
@@ -285,10 +285,15 @@ export function settle(state, counts, pop) {
     rail += Math.min(pop / 10, seats / 4) * tourism;
     riders += Math.min(Math.round(pop * 0.4), seats);
   }
+  let facilityIncome = 0;
+  for (const kind of kinds) {
+    const { daily = 0, perStop = 0 } = FACILITIES[kind];
+    facilityIncome += (typeof daily === 'function' ? daily(pop) : daily) + perStop * counts.stops.length;
+  }
   const busIncome = 3 * state.buses.length;
   const cost = 8 * (counts.runs + counts.backhauls) + state.buses.length;
-  const balance = state.unlimited ? state.money : state.money + rail + busIncome - cost;
-  return { day: state.day, income: { rail, bus: busIncome, facility: 0 }, cost, riders, balance };
+  const balance = state.unlimited ? state.money : state.money + rail + busIncome + facilityIncome - cost;
+  return { day: state.day, income: { rail, bus: busIncome, facility: facilityIncome }, cost, riders, balance };
 }
 
 // Validates the sequence of trips for a single train in a 24-hour circular timetable.
