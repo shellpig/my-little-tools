@@ -7,7 +7,7 @@
 - 分支：`feat/small-town-p2-c`，從 main `e9628e3`（P2-B 已合入）開出；完成後 merge 回 main。
 - 指揮者：Claude Code；實作者：agy / Gemini 3.1 Pro (High)；本機工作樹直接改程式，不得 git 寫入。
 - 拆法：依讀取範圍拆三步（handbook §2.1）。C1 公車只碰 Bus／makeBus／經營面板公車分頁／settle；C2 設施建造只碰編輯器新增／放置／刪除與素材；C3 設施效果只碰接路判定、範圍圈、settle／population。
-- 下一步：C1 完成；C2 派工中。
+- 下一步：C1、C2 完成；C3 派工中。
 - 契約：本目錄實作規格、開發設計方針、測試指南的 P2-C 段；契約疑點由指揮者裁定，記在各 step 檔。
 - prompt 與輸出：`C:\_work\AI_Work\Tools\agy-runs\agy-small-town-P2-C*.*`。
 
@@ -16,5 +16,5 @@
 | 步驟 | 標題 | 狀態 | 依賴 | 詳細紀錄 |
 |---|---|---|---|---|
 | C1 | 公車：台數、顏色、排班、買賣與結算 | 完成 | P2-B | [C1.md](P2-C_steps/C1.md) |
-| C2 | 公共設施建造：數值表、素材、新增分頁、扣款與刪除退款 | 進行中 | C1 | [C2.md](P2-C_steps/C2.md) |
+| C2 | 公共設施建造：數值表、素材、新增分頁、扣款與刪除退款 | 完成 | C1 | [C2.md](P2-C_steps/C2.md) |
 | C3 | 公共設施效果：接路判定、影響範圍圈、結算收入與人口 | 待做 | C2 | [C3.md](P2-C_steps/C3.md) |

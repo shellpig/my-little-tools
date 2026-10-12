@@ -15,7 +15,7 @@ import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
-  BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY,
+  BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY, FACILITIES,
   normalizeP2, validateTimetable, canAssignTrain, POP, settle
 } from './atrain.js';
 
@@ -478,12 +478,13 @@ const bedtime = (from, to) => (from + rand() * ((to - from + 24) % 24)) % 24;
 const BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const manager = new THREE.LoadingManager();
 manager.setURLModifier(url =>
-  url.endsWith('Textures/colormap.png') && !/mini-characters|car-kit|train-kit/.test(url) ? BLANK : url);
+  url.endsWith('Textures/colormap.png') && !/mini-characters|car-kit|train-kit|industrial/.test(url) ? BLANK : url);
 const loader = new GLTFLoader(manager);
 const cache = new Map();
 
 function model(pack, name) {
-  const url = `${ASSETS}/${pack}/Models/GLB format/${name}.glb`;
+  const folder = pack === 'nature' ? 'GLTF format' : 'GLB format';
+  const url = `${ASSETS}/${pack}/Models/${folder}/${name}.glb`;
   // Car and train models share their materials with every copy, so they
   // are clipped once here.
   if (!cache.has(url)) {
@@ -2231,7 +2232,7 @@ class Vehicle {
 
 class Bus extends Vehicle {
   constructor(obj) {
-    super(obj, BUS_LENGTH, 0.8, 0);
+    super(obj, BUS_LENGTH, 0.9, 0);
     this.cooldown = 2;
     this.paintMat = obj.userData.paintMat;
   }
@@ -4074,7 +4075,14 @@ addEventListener('keydown', e => {
   }
   if (!selected) return;
   if (e.code === 'KeyR' && !e.repeat) change(selected, { ...stateOf(selected), rot: (selected.pivot.rotation.y + Math.PI / 2) % (Math.PI * 2) });
-  if (e.code === 'Delete' || e.code === 'Backspace') change(selected, { ...stateOf(selected), removed: true });
+  if (e.code === 'Delete' || e.code === 'Backspace') {
+    let refund = 0;
+    if (selected.add?.type === 'facility') {
+      refund = applyMoney(FACILITIES[selected.add.kind].price / 2);
+    }
+    change(selected, { ...stateOf(selected), removed: true });
+    if (refund) undos.at(-1).money = refund;
+  }
   if (e.code === 'Escape') select(null);
 });
 // ---------- adding to the town ----------
@@ -4087,6 +4095,7 @@ const ADD_TYPES = [
   { type: 'house', label: '住家', pack: 'commercial', models: BUILDINGS },
   { type: 'villa', label: '別墅', pack: 'suburban', models: [...'abcdefghijklmnopqrstu'].map(c => `building-type-${c}`) },
   { type: 'shop', label: '商店', pack: 'commercial', models: BUILDINGS },
+  { type: 'facility', label: '公共設施', atrainOnly: true },
   { type: 'tree', label: '樹', pack: 'suburban', models: ['tree-large', 'tree-small'] },
   { type: 'lamp', label: '路燈', pack: 'roads', models: ['light-square', 'light-curved'] },
   { type: 'paving', label: '道路', models: [] },
@@ -4106,12 +4115,53 @@ const SHOP_THEMES = [
 let placing = null;
 let placingTicket = null;
 let pointerFloor = null;
-const addChoice = { type: 'house', wall: -1, villaWall: 0, roof: 0, theme: 0 };
+const addChoice = { type: 'house', wall: -1, villaWall: 0, roof: 0, theme: 0, facilityKind: 'apartment' };
 
 // Built at the origin facing +z; its pivot then carries it into place.
 async function buildAdded(id, add) {
   let item;
-  if (add.type === 'tree') {
+  if (add.type === 'facility') {
+    const fac = FACILITIES[add.kind];
+    if (fac.compose === 'park') {
+      const parts = [
+        await place('nature', 'path_stoneCircle', { scale: 1.3 }),
+        await place('nature', 'tree_default', { x: -0.42, z: -0.42, scale: 0.6 }),
+        await place('nature', 'tree_default', { x: 0.42, z: -0.40, scale: 0.55, rot: 1.5 }),
+        await place('nature', 'tree_default', { x: 0.05, z: 0.45, scale: 0.65, rot: 3.0 }),
+      ];
+      item = editable(id, parts);
+    } else if (fac.compose === 'camp') {
+      const parts = [
+        await place('nature', 'campfire_stones', { scale: 0.75 }),
+        await place('nature', 'tent_detailedOpen', { x: -0.3, z: 0.35, rot: -0.4, scale: 0.8 }),
+        await place('nature', 'tent_smallOpen', { x: 0.35, z: -0.35, rot: 2.5, scale: 0.85 }),
+      ];
+      item = editable(id, parts);
+    } else if (fac.compose === 'farm') {
+      const cropModel = add.model || 'crops_cornStageD';
+      const parts = [
+        await place('nature', 'crops_dirtDoubleRow', { scale: 1.35 }),
+        await place('nature', cropModel, { x: -0.35, z: -0.25 }),
+        await place('nature', cropModel, { x: 0, z: -0.25 }),
+        await place('nature', cropModel, { x: 0.35, z: -0.25 }),
+        await place('nature', cropModel, { x: -0.35, z: 0.25 }),
+        await place('nature', cropModel, { x: 0, z: 0.25 }),
+        await place('nature', cropModel, { x: 0.35, z: 0.25 }),
+      ];
+      item = editable(id, parts);
+    } else {
+      const isCommercialEarn = fac.group === 'earn' && fac.pack === 'commercial';
+      let mat;
+      if (isCommercialEarn) {
+        const walls = add.wall >= 0 ? kit.pastels[add.wall] : kit.commercial;
+        mat = paletteMaterial(walls, [1.4, 0.7, 2.2][Math.floor(Math.random() * 3)],
+          (21.5 + Math.random() * 5) % 24, Math.random() * 0.15);
+      }
+      const obj = solidOf(await place(fac.pack, add.model, { scale: fac.scale, mat }));
+      item = editable(id, [obj], { solids: [obj.userData.solid] });
+      if (isCommercialEarn) paintable(item, mat, false);
+    }
+  } else if (add.type === 'tree') {
     const c = collect(() => post(0, 0, 0.1));
     const obj = await place('suburban', add.model, { scale: 1.25, mat: kit.plantMat });
     item = editable(id, [obj], c);
@@ -4148,17 +4198,30 @@ async function startPlacing(add, rot = 0) {
   select(item);
   $('prompt').textContent = '點地面放下 · R 旋轉 · Esc 或右鍵取消';
   $('prompt').hidden = false;
+  renderAddPanel();
 }
 
 function putDown() {
   const item = placing;
+  let moneyDelta = 0;
+  if (item.add?.type === 'facility') {
+    const { price } = FACILITIES[item.add.kind];
+    if (!spend(price)) {
+      cancelPlacing();
+      return;
+    }
+    moneyDelta = p2State.unlimited ? 0 : -price;
+  }
   placing = null;
   $('prompt').hidden = true;
-  undos.push([[item, { ...stateOf(item), removed: true }]]);
+  const step = [[item, { ...stateOf(item), removed: true }]];
+  if (moneyDelta) step.money = moneyDelta;
+  undos.push(step);
   saveLayout();
   settleTown();
   reseatCats([], footprintOf(item));
   select(item);
+  renderAddPanel();
 }
 
 function cancelPlacing() {
@@ -4168,6 +4231,7 @@ function cancelPlacing() {
   placing = null;
   $('prompt').hidden = true;
   select(null);
+  renderAddPanel();
 }
 
 // Gone for good: never placed, so nothing can bring it back.
@@ -4185,6 +4249,20 @@ function chip(label, on, onclick) {
   return b;
 }
 
+function startFacilityPlacing(kind, rot = 0, keepModel = null) {
+  addChoice.facilityKind = kind;
+  const fac = FACILITIES[kind];
+  let model = keepModel;
+  if (!model && fac.models) {
+    model = fac.models[Math.floor(Math.random() * fac.models.length)];
+  }
+  const add = { type: 'facility', kind, model };
+  if (fac.group === 'earn' && fac.pack === 'commercial' && addChoice.wall >= 0) {
+    add.wall = addChoice.wall;
+  }
+  startPlacing(add, rot);
+}
+
 // What to build for a model, with the colours picked in the panel.
 function addFor(t, model) {
   const add = { type: t.type, model };
@@ -4195,21 +4273,34 @@ function addFor(t, model) {
 }
 
 function renderAddPanel() {
-  const t = ADD_TYPES.find(a => a.type === addChoice.type);
+  const types = ADD_TYPES.filter(a => !a.atrainOnly || LEVEL.atrain);
+  let t = types.find(a => a.type === addChoice.type);
+  if (!t) {
+    addChoice.type = 'house';
+    t = types[0];
+  }
   const restyle = pick => () => {
     Object.assign(addChoice, pick);
     if (pick.type && pick.type !== 'paving') setBrush(null);
     renderAddPanel();
     if (pick.type) return;
     // A new colour repaints the building still in hand, keeping its turn.
-    if (placing?.add.type === t.type) startPlacing(addFor(t, placing.add.model), placing.pivot.rotation.y);
+    if (placing?.add.type === t.type) {
+      if (t.type === 'facility') {
+        startFacilityPlacing(placing.add.kind, placing.pivot.rotation.y, placing.add.model);
+      } else {
+        startPlacing(addFor(t, placing.add.model), placing.pivot.rotation.y);
+      }
+    }
   };
   $('add-paving').hidden = t.type !== 'paving';
   $('add-model-box').hidden = t.type === 'paving';
   $('add-brushes').replaceChildren(...BRUSHES.map(([b, label]) => chip(label, brush === b, () => setBrush(brush === b ? null : b))));
-  $('add-tabs').replaceChildren(...ADD_TYPES.map(a => chip(a.label, a === t, restyle({ type: a.type }))));
+  $('add-tabs').replaceChildren(...types.map(a => chip(a.label, a === t, restyle({ type: a.type }))));
   const villa = t.type === 'villa';
-  $('add-walls').hidden = t.pack !== 'commercial' && !villa;
+  const currentKind = placing?.add?.type === 'facility' ? placing.add.kind : addChoice.facilityKind;
+  const isCommEarn = t.type === 'facility' && currentKind && FACILITIES[currentKind]?.group === 'earn' && FACILITIES[currentKind]?.pack === 'commercial';
+  $('add-walls').hidden = !isCommEarn && (t.pack !== 'commercial' && !villa);
   $('add-walls-row').replaceChildren(...(villa
     ? VILLA_WALLS.map(([label], i) => chip(label, addChoice.villaWall === i, restyle({ villaWall: i })))
     : WALLS.map(([label, w]) => chip(label, addChoice.wall === w, restyle({ wall: w })))));
@@ -4223,13 +4314,40 @@ function renderAddPanel() {
     b.onclick = restyle({ theme: i });
     return b;
   }));
-  $('add-models').replaceChildren(...t.models.map(model => {
-    const b = document.createElement('button');
-    b.title = model;
-    b.innerHTML = `<img src="${ASSETS}/${t.pack}/Previews/${model}.png" alt="">`;
-    b.onclick = () => startPlacing(addFor(t, model));
-    return b;
-  }));
+  if (t.type === 'facility') {
+    $('add-models').className = '';
+    const earnChips = Object.entries(FACILITIES)
+      .filter(([, f]) => f.group === 'earn')
+      .map(([k, f]) => chip(`${f.name} ${f.price}萬`, placing?.add?.kind === k, () => startFacilityPlacing(k)));
+    const decoChips = Object.entries(FACILITIES)
+      .filter(([, f]) => f.group === 'deco')
+      .map(([k, f]) => chip(`${f.name} ${f.price}萬`, placing?.add?.kind === k, () => startFacilityPlacing(k)));
+
+    const l1 = document.createElement('div');
+    l1.className = 'opt-label';
+    l1.textContent = '賺錢';
+    const r1 = document.createElement('div');
+    r1.className = 'chips';
+    r1.replaceChildren(...earnChips);
+
+    const l2 = document.createElement('div');
+    l2.className = 'opt-label';
+    l2.textContent = '裝飾公益';
+    const r2 = document.createElement('div');
+    r2.className = 'chips';
+    r2.replaceChildren(...decoChips);
+
+    $('add-models').replaceChildren(l1, r1, l2, r2);
+  } else {
+    $('add-models').className = 'add-models';
+    $('add-models').replaceChildren(...t.models.map(model => {
+      const b = document.createElement('button');
+      b.title = model;
+      b.innerHTML = `<img src="${ASSETS}/${t.pack}/Previews/${model}.png" alt="">`;
+      b.onclick = () => startPlacing(addFor(t, model));
+      return b;
+    }));
+  }
 }
 
 $('edit-add').addEventListener('click', () => {
