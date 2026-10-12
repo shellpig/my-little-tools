@@ -50,13 +50,13 @@ reviewer 共通：**預設 read-only**——不寫檔、不刪檔、不 stage、
 **Antigravity CLI**：直接用完整路徑最穩。兩種用法：**review**（沿用上方 read-only 規則）與 **worker**（可寫程式，但不得 stage / commit / push；commit 權在 Claude）。
 
 ```powershell
-cmd /c "C:\Users\User\AppData\Local\agy\bin\agy.exe -p `\"Your full task is in C:\_work\AI_Work\Tools\agy-runs\<步驟>.prompt.txt. Read it first, then follow every instruction in it.`\" --model `\"<模型>`\" --add-dir `\"E:\AI_Work\projects\my-little-tools`\" --add-dir `\"C:\_work\AI_Work\Tools\agy-runs`\" --dangerously-skip-permissions --output-format json --print-timeout 20m < NUL > C:\_work\AI_Work\Tools\agy-runs\<步驟>.json 2>&1"
+cmd /c "C:\Users\User\AppData\Local\agy\bin\agy.exe -p `\"Your full task is in C:\_work\AI_Work\Tools\agy-runs\<步驟>.prompt.txt. Read it first, then follow every instruction in it.`\" --model `\"<模型>`\" --add-dir `\"E:\AI_Work\projects\my-little-tools`\" --add-dir `\"C:\_work\AI_Work\Tools\agy-runs`\" --dangerously-skip-permissions --output-format stream-json --print-timeout 20m < NUL > C:\_work\AI_Work\Tools\agy-runs\<步驟>.jsonl 2>&1"
 ```
 
 - `--add-dir` 讓 agy 讀到專案與 prompt 檔，`--dangerously-skip-permissions` 單次生效，兩者都不可省。
 - **`-p` 只能放單行短句，任務本文寫進檔案讓 agy 自己讀**。多行 prompt 經 `cmd /c` 會在第一個換行截斷，後面的 flag 與重導全部遺失，agy 會以無權限狀態靜默結束。
 - **一律 `run_in_background` 啟動**，結束時 Claude 會被喚醒，直接讀輸出檔。
-- `--output-format json` 回傳 `conversation_id`／`status`／`duration_seconds`／`usage`。**同一步驟的修改回合用 `--conversation <id>` 接續**；換下一步驟一律開新對話。
+- `--output-format stream-json` 每個工具呼叫即時寫一行（第一行 `init` 帶 `conversation_id`），可邊跑邊看進度，見指揮者手冊 §3.1。**同一步驟的修改回合用 `--conversation <id>` 接續**；換下一步驟一律開新對話。
 - prompt 骨架見指揮者手冊 §2.2（`C:\_work\AI_Work\Tools\agy-runs\TEMPLATE.prompt.txt` 是 adventure-table 用的，小鎮照手冊 §2.2 寫，不要整份沿用）。
 - Model：`--model` 用 `agy models` 列出的完整顯示字串，未指定時預設 `"Gemini 3.8 Flash (High)"`。
 

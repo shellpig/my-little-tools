@@ -109,6 +109,22 @@ export const DEFAULT_TIMETABLE = [
   { train: 't3', dir: 'west', hour: 21, stop: false },
 ];
 
+export const BUS_PRICE = 100;
+export const BUS_MAX = 4;
+export const BUS_COLORS = {
+  green: 0x2e8b74,
+  red: 0xd9383a,
+  blue: 0x2b7bbb,
+  yellow: 0xf5b025,
+  orange: 0xe66a28,
+  purple: 0x8a4ebd,
+  white: 0xe8ecef,
+  gray: 0x6e7681,
+};
+
+// One bus every BUS_HEADWAY minutes, split across the buses, 06:00-23:00.
+export const BUS_HEADWAY = 120;
+
 export function createDefaultP2() {
   return {
     v: 1,
@@ -117,6 +133,7 @@ export function createDefaultP2() {
     unlimited: false,
     fleet: DEFAULT_FLEET.map(t => ({ ...t })),
     timetable: DEFAULT_TIMETABLE.map(t => ({ ...t })),
+    buses: [{ color: 'green' }],
     ledger: [],
   };
 }
@@ -140,6 +157,13 @@ export function normalizeP2(rawP2) {
   } else {
     out.timetable = out.timetable.filter(t => t && typeof t === 'object');
   }
+  if (!Array.isArray(out.buses)) {
+    out.buses = [{ color: 'green' }];
+  } else {
+    out.buses = out.buses.filter(b => b && typeof b === 'object').map(b => ({
+      color: (typeof b.color === 'string' && BUS_COLORS[b.color] !== undefined) ? b.color : 'green',
+    }));
+  }
   if (!Array.isArray(out.ledger)) {
     out.ledger = [];
   } else {
@@ -162,9 +186,10 @@ export function settle(state, counts, pop) {
     rail += Math.min(pop / 10, seats / 4) * tourism;
     riders += Math.min(Math.round(pop * 0.4), seats);
   }
-  const cost = 8 * (counts.runs + counts.backhauls);
-  const balance = state.unlimited ? state.money : state.money + rail - cost;
-  return { day: state.day, income: { rail, bus: 0, facility: 0 }, cost, riders, balance };
+  const busIncome = 3 * state.buses.length;
+  const cost = 8 * (counts.runs + counts.backhauls) + state.buses.length;
+  const balance = state.unlimited ? state.money : state.money + rail + busIncome - cost;
+  return { day: state.day, income: { rail, bus: busIncome, facility: 0 }, cost, riders, balance };
 }
 
 // Validates the sequence of trips for a single train in a 24-hour circular timetable.

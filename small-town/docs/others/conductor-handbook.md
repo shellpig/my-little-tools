@@ -96,21 +96,22 @@ git pull --ff-only（ChatGPT／網頁版 Muse）或 git diff（agy／OpenCode Mu
 
 ### 3.1 中途監看與判死（不要傻等 print-timeout）
 
-背景啟動後立刻掛一個 `Monitor`（或等價的背景 loop），每 4～5 分鐘印一行：
+**一律用 `--output-format stream-json` 啟動，輸出到 `<步驟>.jsonl`。** 每個工具呼叫都會即時寫一行 `step_update`（`tool_name`、讀哪個檔、`step_index`），指揮者不用打擾 agy 就能看到它在做什麼。只看改檔數會把長時間讀檔誤判成卡住（P2-A 曾讀檔 20 分鐘）。
 
-```bash
-git status --short --untracked-files=all -- small-town | wc -l   # 改動檔數
-ls -t small-town/*.js | head -1                                    # 最新被改的檔
-```
-
-輸出檔（`<步驟>.json`）非空即結束，loop 退出。判斷規則：
+背景啟動後立刻掛一個 `Monitor`（或等價的背景 loop），每 4～5 分鐘印一行：最後一筆 `step_update` 的 `step_index`、`tool_name` 與檔名，以及 `git diff --stat` 的改動量。jsonl 出現 `"event":"result"`（或程序結束）即結束 loop。判斷規則：
 
 | 觀察 | 判定 | 動作 |
 |---|---|---|
-| 檔數在增加、或最新檔 mtime 在變 | 正常 | 不打擾 |
-| 前 5 分鐘 0 檔改動 | 正常（讀檔階段） | 不打擾 |
-| 連續 2 次（≈8～10 分鐘）檔數與 mtime 都不變 | 卡住 | 殺 agy 程序，讀輸出檔與已寫的檔，小則自己收尾、大則開新對話重送 |
-| 輸出檔開頭 `print timeout after ... with turn in progress` | 已死 | 同上 |
+| `step_index` 在增加（不論在讀檔或寫檔） | 正常 | 不打擾 |
+| `step_index` 在增加，但超過 10 分鐘仍只在讀檔、沒有寫檔 | 步驟太大的訊號 | 不打斷；交件或超時後依 §2.1 檢討拆法 |
+| `step_index` 連續 2 次（≈8～10 分鐘）不變 | 卡住 | 見下方「卡住或超時」 |
+| 輸出出現 `print timeout after ... with turn in progress` | 超時 | 見下方「卡住或超時」 |
+
+**卡住或超時：先要進度報告，再決定。** headless 回合進行中無法插話，所以：
+
+1. 卡住時殺 agy 程序；超時時程序已自己結束。
+2. 用同一個 `--conversation <id>` 送一個短回合：「停止實作，只回報進度：已讀了哪些檔、已改了哪些檔與函式、還剩哪些 SCOPE 項目、卡在哪裡。不要再改檔。」
+3. 對照它的報告與 `git diff`：剩一點（幾行、單一區段）→ 指揮者自己收尾；剩很多 → 同一 conversation 續做剩下項目，或開新對話只送剩下的項目。
 
 重送時 prompt 加一句硬規則：「所有指令前景執行並等它回來；不得把工作丟到背景再等。」
 

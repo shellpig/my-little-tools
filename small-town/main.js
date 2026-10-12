@@ -15,8 +15,20 @@ import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
+  BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY,
   normalizeP2, validateTimetable, canAssignTrain, POP, settle
 } from './atrain.js';
+
+const BUS_COLOR_LABELS = {
+  green: '綠',
+  red: '紅',
+  blue: '藍',
+  yellow: '黃',
+  orange: '橘',
+  purple: '紫',
+  white: '白',
+  gray: '灰',
+};
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -2221,6 +2233,7 @@ class Bus extends Vehicle {
   constructor(obj) {
     super(obj, BUS_LENGTH, 0.8, 0);
     this.cooldown = 2;
+    this.paintMat = obj.userData.paintMat;
   }
 
   // Along its route while the road is whole; straight on anywhere else, so a
@@ -2399,11 +2412,11 @@ function makeCar(gltf, headMat, tailMat) {
 
 // The city bus: green lower body, a window band lit from inside at night,
 // white roof, front door on the curb (−x) side and four Car Kit wheels.
-function makeBus(wheel, headMat, tailMat) {
+function makeBus(wheel, headMat, tailMat, color = 'green') {
   const g = new THREE.Group();
   const L = BUS_LENGTH;
   const W = BUS_WIDTH;
-  const paint = std(0x2e8b74, { roughness: 0.5 });
+  const paint = std(BUS_COLORS[color], { roughness: 0.5 });
   const white = std(0xf2f0ea, { roughness: 0.5 });
   const glass = std(0x1c2a36, { roughness: 0.15, metalness: 0.3, emissive: 0xffe2b0, emissiveIntensity: 0 });
   glowing.push([glass, 0.6]);
@@ -2434,7 +2447,38 @@ function makeBus(wheel, headMat, tailMat) {
       g.add(w);
     }
   }
+  g.userData.paintMat = paint;
   return g;
+}
+
+let busWheel, busHeadMat, busTailMat;
+const stationBuses = [];
+let busRoundRobinIndex = 0;
+let nextBusSlotMinute = 360;
+
+function findNextBusSlot(targetMinutes, count) {
+  if (count <= 0) return Infinity;
+  const step = BUS_HEADWAY / count;
+  const dayBase = Math.floor(targetMinutes / 1440) * 1440;
+  const m = targetMinutes - dayBase;
+  if (m <= 360) return dayBase + 360;
+  if (m <= 1380) {
+    const k = Math.ceil((m - 360) / step);
+    const slotM = 360 + k * step;
+    if (slotM <= 1380) return dayBase + slotM;
+  }
+  return dayBase + 1440 + 360;
+}
+
+function initStationBuses() {
+  stationBuses.length = 0;
+  for (const bData of p2State.buses) {
+    const bus = new Bus(makeBus(busWheel, busHeadMat, busTailMat, bData.color));
+    stationBuses.push(bus);
+    vehicles.push(bus);
+  }
+  busRoundRobinIndex = 0;
+  nextBusSlotMinute = findNextBusSlot(clockMinutes, stationBuses.length);
 }
 
 async function addTraffic() {
@@ -2444,11 +2488,20 @@ async function addTraffic() {
   clipMat(headMat);
   clipMat(tailMat);
   const [wheel, ...cars] = await Promise.all(['wheel-default', ...CARS].map(n => model('car-kit', n)));
+  busWheel = wheel;
+  busHeadMat = headMat;
+  busTailMat = tailMat;
   cars.forEach((gltf, i) => {
     const { group, length } = makeCar(gltf, headMat, tailMat);
     vehicles.push(new Vehicle(group, length, 0.9 + rand() * 0.35, i / cars.length));
   });
-  if (LEVEL.bus) vehicles.push(new Bus(makeBus(wheel, headMat, tailMat)));
+  if (LEVEL.bus) {
+    if (LEVEL.atrain) {
+      initStationBuses();
+    } else {
+      vehicles.push(new Bus(makeBus(wheel, headMat, tailMat)));
+    }
+  }
 
   // Parked cars in the car park, lights off.
   if (LOT) {
@@ -2463,6 +2516,47 @@ async function addTraffic() {
       solid(stall.x, stall.z, 0.16, 0.27);
     });
   }
+}
+
+function updateBusDispatch() {
+  const count = stationBuses.length;
+  if (count <= 0 || !busRoute) return;
+  const dayBase = Math.floor(clockMinutes / 1440) * 1440;
+  const dayMin = clockMinutes - dayBase;
+
+  if (dayMin > 1380) {
+    nextBusSlotMinute = Math.max(nextBusSlotMinute, dayBase + 1440 + 360);
+    return;
+  }
+  if (dayMin < 360) {
+    nextBusSlotMinute = Math.max(nextBusSlotMinute, dayBase + 360);
+    return;
+  }
+  if (clockMinutes < nextBusSlotMinute) return;
+
+  const from = busExitSide(busRoute[0]);
+  if (from === null) return;
+  const way = [busRoute[0], from];
+  const node = roads.get(way[0]);
+  if (!node || node.holder) return;
+  const start = pathThrough(node, from, opposite(from)).getPoint(0);
+  const clear = vehicles.every(o => !o.onRoad || o.pos.distanceTo(start) > (o.length + BUS_LENGTH) / 2 + 0.6);
+  if (!clear) return;
+
+  let foundIndex = -1;
+  for (let i = 0; i < count; i++) {
+    const idx = (busRoundRobinIndex + i) % count;
+    if (!stationBuses[idx].onRoad) {
+      foundIndex = idx;
+      break;
+    }
+  }
+  if (foundIndex === -1) return;
+
+  const bus = stationBuses[foundIndex];
+  bus.enter(...way);
+  busRoundRobinIndex = (foundIndex + 1) % count;
+  nextBusSlotMinute = findNextBusSlot(clockMinutes + 0.001, count);
 }
 
 // Waiting vehicles come in at the fog edge once the way in is clear; the
@@ -2480,6 +2574,7 @@ function updateTraffic(dt, activity) {
     if (v.onRoad || v.cooldown > 0 || v.rank >= activity) continue;
     let ways;
     if (v instanceof Bus) {
+      if (LEVEL.atrain) continue;
       if (!busRoute) continue;
       const from = busExitSide(busRoute[0]);
       if (from === null) continue;
@@ -2496,6 +2591,7 @@ function updateTraffic(dt, activity) {
     });
     if (way) v.enter(...way);
   }
+  if (LEVEL.atrain) updateBusDispatch();
 }
 
 // ---------- time of day ----------
@@ -2721,6 +2817,12 @@ function jumpTime(nextHour) {
     if (p2State) p2State.day = opsDay;
   }
   if (rail) rail.seek(targetMinutes);
+  if (LEVEL.atrain) {
+    for (const b of stationBuses) {
+      if (b.onRoad) b.leave();
+    }
+    nextBusSlotMinute = findNextBusSlot(targetMinutes, stationBuses.length);
+  }
   clockMinutes = targetMinutes;
   time = normHour;
   applyTime(time);
@@ -4800,11 +4902,131 @@ function setupOpsPanel() {
   });
   opsClose.addEventListener('click', () => toggleOps(false));
 
+  let currentOpsTab = 'train';
+  const opsTabs = $('ops-tabs');
+  if (opsTabs) {
+    for (const btn of opsTabs.querySelectorAll('button[data-tab]')) {
+      btn.addEventListener('click', () => {
+        currentOpsTab = btn.dataset.tab;
+        for (const b of opsTabs.querySelectorAll('button[data-tab]')) {
+          b.classList.toggle('on', b === btn);
+        }
+        if ($('ops-train-tab')) $('ops-train-tab').hidden = currentOpsTab !== 'train';
+        if ($('ops-bus-tab')) $('ops-bus-tab').hidden = currentOpsTab !== 'bus';
+        renderOpsPanel();
+      });
+    }
+  }
+
   function renderOpsPanel() {
     unlimitedBox.checked = p2State.unlimited;
-    renderFleetList();
-    renderBuyButtons();
-    renderTimetable();
+    if (currentOpsTab === 'train') {
+      renderFleetList();
+      renderBuyButtons();
+      renderTimetable();
+    } else if (currentOpsTab === 'bus') {
+      renderBusList();
+      renderBusBuyButton();
+    }
+  }
+
+  function renderBusList() {
+    const listEl = $('ops-bus-list');
+    if (!listEl) return;
+    listEl.textContent = '';
+
+    p2State.buses.forEach((bData, i) => {
+      const card = document.createElement('div');
+      card.className = 'fleet-card';
+
+      const head = document.createElement('div');
+      head.className = 'fleet-card-head';
+
+      const title = document.createElement('span');
+      title.style.fontWeight = '700';
+      title.textContent = `公車 ${i + 1}`;
+      head.appendChild(title);
+
+      const sellBtn = document.createElement('button');
+      sellBtn.className = 'fleet-sell-btn';
+      sellBtn.textContent = '出售';
+      sellBtn.title = `出售這輛公車（退回 ${BUS_PRICE / 2} 萬）`;
+      sellBtn.addEventListener('click', () => {
+        if (!confirm(`確定要出售「公車 ${i + 1}」？`)) return;
+        applyMoney(BUS_PRICE / 2);
+        const b = stationBuses[i];
+        if (b) {
+          if (b.onRoad) b.leave();
+          scene.remove(b.obj);
+          const vIdx = vehicles.indexOf(b);
+          if (vIdx >= 0) vehicles.splice(vIdx, 1);
+        }
+        stationBuses.splice(i, 1);
+        p2State.buses.splice(i, 1);
+        if (stationBuses.length > 0) {
+          busRoundRobinIndex %= stationBuses.length;
+          nextBusSlotMinute = findNextBusSlot(clockMinutes, stationBuses.length);
+        } else {
+          busRoundRobinIndex = 0;
+          nextBusSlotMinute = Infinity;
+        }
+        saveLayout();
+        renderOpsPanel();
+      });
+      head.appendChild(sellBtn);
+      card.appendChild(head);
+
+      const info = document.createElement('div');
+      info.className = 'fleet-card-info';
+      info.style.alignItems = 'center';
+
+      const chipsWrap = document.createElement('div');
+      chipsWrap.className = 'chips';
+      for (const [cKey, hex] of Object.entries(BUS_COLORS)) {
+        const cBtn = chip(BUS_COLOR_LABELS[cKey], bData.color === cKey, () => {
+          bData.color = cKey;
+          stationBuses[i].paintMat.color.setHex(hex);
+          saveLayout();
+          renderBusList();
+        });
+        cBtn.style.padding = '3px 8px';
+        cBtn.style.fontSize = '12px';
+        chipsWrap.appendChild(cBtn);
+      }
+      info.appendChild(chipsWrap);
+      card.appendChild(info);
+      listEl.appendChild(card);
+    });
+  }
+
+  function renderBusBuyButton() {
+    const buyBox = $('ops-bus-buy');
+    if (!buyBox) return;
+    buyBox.textContent = '';
+
+    const buyBtn = document.createElement('button');
+    if (p2State.buses.length >= BUS_MAX) {
+      buyBtn.disabled = true;
+      buyBtn.textContent = '+ 購買公車';
+      buyBtn.title = `已達公車數量上限（${BUS_MAX} 台）`;
+    } else {
+      buyBtn.disabled = false;
+      buyBtn.textContent = `+ 購買公車（${BUS_PRICE} 萬）`;
+      buyBtn.title = `購買新公車（${BUS_PRICE} 萬）`;
+      buyBtn.addEventListener('click', () => {
+        if (p2State.buses.length >= BUS_MAX) return;
+        if (!spend(BUS_PRICE)) return;
+        const newBusData = { color: 'green' };
+        p2State.buses.push(newBusData);
+        const bus = new Bus(makeBus(busWheel, busHeadMat, busTailMat, newBusData.color));
+        stationBuses.push(bus);
+        vehicles.push(bus);
+        nextBusSlotMinute = findNextBusSlot(clockMinutes, stationBuses.length);
+        saveLayout();
+        renderOpsPanel();
+      });
+    }
+    buyBox.appendChild(buyBtn);
   }
 
   function renderFleetList() {
