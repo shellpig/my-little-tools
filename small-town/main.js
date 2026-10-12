@@ -3296,6 +3296,25 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (!hit) {
     if (stationVoice && raycaster.intersectObject(stationVoice.obj, true)[0]) {
       talkStation();
+      return;
+    }
+    if (LEVEL.atrain && rail && !player.active) {
+      let closest = null;
+      let targetUnits = null;
+      for (const train of rail.fleet.values()) {
+        const visible = train.consist.units.filter(u => u.obj.visible).map(u => u.obj);
+        if (visible.length) {
+          const hits = raycaster.intersectObjects(visible, true);
+          if (hits.length && (!closest || hits[0].distance < closest.distance)) {
+            closest = hits[0];
+            targetUnits = train.consist.units;
+          }
+        }
+      }
+      if (targetUnits) {
+        followTrain(targetUnits);
+        return;
+      }
     }
     return;
   }
@@ -3455,6 +3474,7 @@ function setMove(move) {
 }
 
 function togglePlay() {
+  stopFollow();
   if (editing) setEditing(false);
   player.active = !player.active;
   document.body.classList.toggle('playing', player.active);
@@ -3671,7 +3691,13 @@ function interact() {
 
 const MOVE_KEYS = { KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1], KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0] };
 addEventListener('keydown', e => {
-  if (e.code === 'Escape') openCloset(false);
+  if (e.code === 'Escape') {
+    if (stopFollow()) {
+      e.stopImmediatePropagation();
+      return;
+    }
+    openCloset(false);
+  }
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyC' && !e.repeat) openCloset();
   if (!closet.hidden) return;
@@ -4100,6 +4126,7 @@ function currentPaint(item) {
 }
 
 function setEditing(on) {
+  if (on) stopFollow();
   if (on && player.active) togglePlay();
   editing = on;
   document.body.classList.toggle('editing', on);
@@ -5346,6 +5373,59 @@ function updateBell(dt) {
   tones.forEach((gain, k) => gain.gain.setTargetAtTime(k === tone ? 1 : 0, audioCtx.currentTime, 0.01));
 }
 
+// ---------- train camera (P2-E) ----------
+
+let followingTrain = null;
+
+function followTrain(units) {
+  if (!followingTrain) {
+    followingTrain = {
+      units,
+      pos: camera.position.clone(),
+      target: controls.target.clone(),
+      ideal: new THREE.Vector3(),
+      lookAt: new THREE.Vector3(),
+    };
+    controls.enabled = false;
+  } else {
+    followingTrain.units = units;
+  }
+}
+
+function stopFollow() {
+  if (!followingTrain) return false;
+  camera.position.copy(followingTrain.pos);
+  controls.target.copy(followingTrain.target);
+  camera.lookAt(controls.target);
+  controls.enabled = true;
+  followingTrain = null;
+  return true;
+}
+
+function updateFollow(dt) {
+  if (!followingTrain) return;
+  const head = followingTrain.units[0].obj;
+  if (!head.visible) {
+    stopFollow();
+    return;
+  }
+  const ry = head.rotation.y;
+  followingTrain.ideal.set(
+    head.position.x - Math.sin(ry) * 2.6,
+    head.position.y + 1.4,
+    head.position.z - Math.cos(ry) * 2.6
+  );
+  followingTrain.lookAt.set(
+    head.position.x,
+    head.position.y + 0.3,
+    head.position.z
+  );
+  const t = 1 - Math.exp(-4 * dt);
+  camera.position.lerp(followingTrain.ideal, t);
+  controls.target.lerp(followingTrain.lookAt, t);
+  camera.lookAt(controls.target);
+}
+
 // ---------- main loop ----------
 
 const clock = new THREE.Clock();
@@ -5417,6 +5497,7 @@ function frame() {
   updatePlayer(dt);
   updateTalk(dt);
   updateGrowing(dt);
+  updateFollow(dt);
   controls.update();
   updateUI();
   composer.render();
