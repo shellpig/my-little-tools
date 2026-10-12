@@ -144,6 +144,7 @@ let opsDay = 0;
 let nextSettlementMinute = 1800;
 let skipModeActive = false;
 let updateFleetLiveStatus = null;
+let refreshTownTab = null;
 const dailyCounts = { stops: [], passes: 0, runs: 0, backhauls: 0 };
 
 function recordTrainRun(kind, typeKey) {
@@ -2757,6 +2758,11 @@ function updateMoneyUI() {
   el.classList.toggle('negative', rounded < 0);
 }
 
+function formatMan(n) {
+  const rounded = Math.round(Math.abs(n) * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
 function applyMoney(delta) {
   if (!LEVEL.atrain || !p2State || p2State.unlimited) return 0;
   p2State.money = Math.round((p2State.money + delta) * 10) / 10;
@@ -2834,9 +2840,8 @@ function advanceClock(deltaMinutes) {
       saveLayout();
       updateMoneyUI();
       const net = (entry.income.rail + entry.income.bus + entry.income.facility) - entry.cost;
-      const roundedNet = Math.round(Math.abs(net) * 10) / 10;
-      const netStr = Number.isInteger(roundedNet) ? String(roundedNet) : roundedNet.toFixed(1);
-      showToast(net >= 0 ? `昨日 +${netStr} 萬` : `昨日 −${netStr} 萬`);
+      showToast(net >= 0 ? `昨日 +${formatMan(net)} 萬` : `昨日 −${formatMan(net)} 萬`);
+      if (refreshTownTab) refreshTownTab();
     }
   }
 }
@@ -5250,6 +5255,7 @@ async function growTown(stops) {
   if (!built.length && !upgraded) return;
   settleTown();
   saveLayout();
+  if (refreshTownTab) refreshTownTab();
   if (built.length) {
     showToast(`新住宅落成 ×${built.length}`, () => {
       const p = built[0].pivot.position;
@@ -5433,9 +5439,71 @@ function setupOpsPanel() {
     }
   }
 
+  const SVG_NS = 'http://www.w3.org/2000/svg';
   const GROWTH_SPEED_LABELS = { slow: '慢', normal: '一般', fast: '快' };
 
+  function renderTownYesterday() {
+    const yEl = $('ops-town-yesterday');
+    if (p2State.ledger.length === 0) {
+      yEl.innerHTML = '<div style="color:var(--dim);font-size:13px;margin:12px 0 6px;">還沒有結算，每天 06:00 結算</div>';
+      return;
+    }
+    const last = p2State.ledger[p2State.ledger.length - 1];
+    const net = (last.income.rail + last.income.bus + last.income.facility) - last.cost;
+    const netSign = net >= 0 ? '+' : '−';
+    const netColor = net < 0 ? '#ff6b6b' : 'inherit';
+    yEl.innerHTML = `
+      <div class="opt-label" style="font-weight:700;margin-top:12px;">昨日（第 ${last.day} 天）</div>
+      <div class="fleet-card" style="margin-bottom:0;padding:8px 10px;line-height:1.6;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;"><span>火車</span><span>+${formatMan(last.income.rail)} 萬</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;"><span>公車</span><span>+${formatMan(last.income.bus)} 萬</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;"><span>設施</span><span>+${formatMan(last.income.facility)} 萬</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;"><span>營運費</span><span>−${formatMan(last.cost)} 萬</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:4px;padding-top:4px;border-top:1px solid var(--line);color:${netColor};"><span>淨額</span><span>${netSign}${formatMan(net)} 萬</span></div>
+      </div>
+    `;
+  }
+
+  function svgEl(tag, attrs) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    return el;
+  }
+
+  // Balance after each of the last 7 settlements, scaled between their min and max.
+  function renderTownChart() {
+    const wrap = $('ops-town-chart');
+    const balances = p2State.ledger.map(e => e.balance);
+    if (balances.length === 0) return wrap.replaceChildren();
+    const W = 240, H = 90, PAD = 24;
+    const minVal = Math.min(...balances);
+    const maxVal = Math.max(...balances);
+    const label = v => `${v < 0 ? '−' : ''}${formatMan(v)}萬`;
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'ops-chart' });
+    svg.append(
+      svgEl('text', { x: 8, y: 15, fill: 'var(--dim)', 'font-size': 10 }),
+      svgEl('text', { x: 8, y: 82, fill: 'var(--dim)', 'font-size': 10 }),
+    );
+    svg.children[0].textContent = label(maxVal);
+    svg.children[1].textContent = label(minVal);
+    const points = balances.map((b, i) => [
+      balances.length === 1 ? W / 2 : PAD + i / (balances.length - 1) * (W - 2 * PAD),
+      maxVal === minVal ? H / 2 : PAD + (maxVal - b) / (maxVal - minVal) * (H - 2 * PAD),
+    ]);
+    if (points.length > 1) {
+      svg.append(svgEl('polyline', { points: points.map(p => p.join(',')).join(' '), fill: 'none',
+        stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+    }
+    for (const [cx, cy] of points) svg.append(svgEl('circle', { cx, cy, r: 3, fill: 'var(--accent)' }));
+    wrap.replaceChildren(svg);
+  }
+
   function renderTownTab() {
+    $('ops-town-pop').textContent = population();
+    $('ops-town-homes').textContent = homeCount();
+    $('ops-town-shops').textContent = shopCount();
+    renderTownYesterday();
+    renderTownChart();
     growthOnBox.checked = p2State.growth.on;
     $('ops-growth-speeds').replaceChildren(...Object.entries(GROWTH_SPEED_LABELS).map(([key, label]) =>
       chip(label, p2State.growth.speed === key, () => {
@@ -5444,6 +5512,12 @@ function setupOpsPanel() {
         renderTownTab();
       })));
   }
+
+  refreshTownTab = function() {
+    if (!opsPanel.hidden && currentOpsTab === 'town') {
+      renderTownTab();
+    }
+  };
 
   function renderBusList() {
     const listEl = $('ops-bus-list');
