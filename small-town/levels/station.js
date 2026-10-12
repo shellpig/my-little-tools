@@ -1,3 +1,5 @@
+import { DEFAULT_FLEET, DEFAULT_TIMETABLE } from '../atrain.js';
+
 // 第 2 關「火車站」的地圖資料（P1-D）。
 // 網格格寬 CELL = 1.6，原點對齊大街（j = 0 即 z = 0，後街 j = -4 即 z = -6.4）。
 // 鐵道在 j = 4（z = 6.4），東西向貫穿整張地圖；車站本體在鐵道北側（x = 0，z = 2.8），面向站前廣場與大街。
@@ -123,6 +125,9 @@ for (let i = -30; i <= 29; i++) railCells.push([i, 4]);
 export default {
   id: 'station',
   name: '火車站',
+  atrain: true,
+  fleet: DEFAULT_FLEET,
+  timetable: DEFAULT_TIMETABLE,
   blurb: '複線鐵道穿過小鎮，車站前就是旅館與商店街。',
   preview: 'levels/station.jpg',
   bounds: [-30, 29, -30, 29],

@@ -95,7 +95,24 @@
   }
   .dress { top: 156px; }
   .edit { top: 200px; }
+  .ops { top: 244px; }
   .newtown { top: 244px; }
+  body.has-ops .newtown { top: 288px; }
+  body.has-ops #ops { display: block; }
+  .ops-panel { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 120px); }
+  .fleet-card { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .04); margin-bottom: 6px; font-size: 13px; }
+  .fleet-card-head { display: flex; align-items: center; gap: 8px; }
+  .fleet-card input { flex: 1; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(255, 255, 255, .06); color: var(--text); font-family: inherit; font-size: 13px; }
+  .fleet-card-info { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 12px; color: var(--dim); }
+  .fleet-sell-btn { padding: 3px 8px; border: 1px solid rgba(255,100,100,.3); border-radius: 6px; background: rgba(255,80,80,.1); color: #ff9999; font-size: 12px; cursor: pointer; }
+  .fleet-sell-btn:disabled { opacity: .4; cursor: default; }
+  .tt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  .tt-table th, .tt-table td { padding: 5px 6px; border: 1px solid var(--line); text-align: center; }
+  .tt-table th { background: rgba(255, 255, 255, .06); color: var(--dim); font-weight: 700; }
+  .tt-cell { cursor: pointer; border-radius: 4px; padding: 4px 2px; transition: background .15s; }
+  .tt-cell:hover { background: rgba(255, 255, 255, .1); }
+  .tt-cell.assigned { background: rgba(255, 210, 122, .12); color: #fff; font-weight: 600; }
+  .tt-cell.error { border: 1px solid #ff5555 !important; background: rgba(255, 85, 85, .15) !important; color: #ff8888 !important; }
   body.editing .edit { background: #f3f5f9; color: #111; }
   .edit-bar { position: fixed; left: 50%; bottom: 24px; z-index: 4; display: none; align-items: center; gap: 10px;
     transform: translateX(-50%); padding: 8px 10px 8px 16px; border: 1px solid var(--line); border-radius: 999px;
@@ -192,7 +209,10 @@
     .play { left: 16px; top: 100px; }
     .dress { top: 144px; }
     .edit { top: 188px; }
+    .ops { top: 232px; }
     .newtown { top: 232px; }
+    body.has-ops .newtown { top: 276px; }
+    .ops-panel { left: 12px; right: 12px; top: 276px; width: auto; }
     .edit-bar span { display: none; }
     .slot { flex-wrap: wrap; }
     .slot img, .slot .shot-empty { flex: none; }
@@ -228,9 +248,9 @@
   <input id="time" type="range" min="0" max="24" step="0.01" value="6">
   <div class="row">
     <button data-speed="0">暫停</button>
-    <button data-speed="60" class="on">60×</button>
-    <button data-speed="600">600×</button>
-    <button data-speed="3600">3600×</button>
+    <button data-speed="60" class="on">1×</button>
+    <button data-speed="600">10×</button>
+    <button data-speed="3600">60×</button>
   </div>
   <div class="row">
     <button data-time="7">清晨</button>
@@ -238,7 +258,7 @@
     <button data-time="18.2">黃昏</button>
     <button data-time="21">夜晚</button>
   </div>
-  <div class="hint">空白鍵暫停 · H 收合面板 · 60× 為每秒經過一分鐘<br>散步模式：WASD 走、Shift 跑、空白鍵跳、E 互動、C 換裝、P 離開</div>
+  <div class="hint">空白鍵暫停 · H 收合面板 · 1× 為每秒經過一分鐘<br>散步模式：WASD 走、Shift 跑、空白鍵跳、E 互動、C 換裝、P 離開</div>
   </div>
 </div>
 
@@ -253,12 +273,47 @@
 <button id="play" class="play"><span class="ico">🚶</span><span>散步模式（P）</span></button>
 <button id="dress" class="play dress"><span class="ico">👕</span><span>換裝（C）</span></button>
 <button id="edit" class="play edit"><span class="ico">🛠</span><span>編輯（B）</span></button>
+<button id="ops" class="play ops" hidden><span class="ico">🚆</span><span>經營</span></button>
 <button id="new-town" class="play newtown"><span class="ico">🏘</span><span>關卡與存檔</span></button>
 <div class="edit-bar">
   <span>拖曳移動建築、樹、路燈 · R 旋轉 · Delete 刪除 · Ctrl+Z 復原</span>
   <button id="edit-undo">復原</button>
   <button id="edit-add">➕ 新增</button>
   <button id="edit-reset">還原預設</button>
+</div>
+<div id="ops-panel" class="add-panel ops-panel" hidden>
+  <div class="slots-head"><b>🚆 經營管理</b><button id="ops-close" class="toggle" title="關閉">✕</button></div>
+  <div class="chips" id="ops-tabs">
+    <button class="on" data-tab="train">火車</button>
+    <button disabled title="P2-C 開放">公車</button>
+    <button disabled title="P2-D 開放">小鎮</button>
+  </div>
+  <div id="ops-train-tab">
+    <div class="opt-label" style="font-weight:700;margin-top:10px;">車隊清單</div>
+    <div id="ops-fleet-list"></div>
+    <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車（免費試營運）</div>
+    <div class="chips" id="ops-buy-buttons"></div>
+    <div class="opt-label" style="font-weight:700;margin-top:14px;">運行班表（24 小時整點）</div>
+    <div id="ops-timetable" class="ops-timetable-wrap"></div>
+  </div>
+</div>
+<div id="ops-cell-modal" class="levels" hidden>
+  <div class="levels-card" style="max-width:440px;padding:16px;" role="dialog" aria-label="設定班次">
+    <div class="levels-head"><b id="ops-modal-title">設定班次</b><button id="ops-modal-close" class="toggle" title="關閉">✕</button></div>
+    <div style="margin-top:12px;">
+      <div class="opt-label">指派車輛</div>
+      <div id="ops-modal-trains" class="chips" style="flex-direction:column;align-items:stretch;gap:8px;"></div>
+      <div class="opt-label" style="margin-top:12px;">停靠方式</div>
+      <div class="row">
+        <button id="ops-modal-stop-true" class="on">停站</button>
+        <button id="ops-modal-stop-false">通過</button>
+      </div>
+      <div class="row" style="margin-top:16px;">
+        <button id="ops-modal-clear" style="color:#ff8888;">清除此班次</button>
+        <button id="ops-modal-confirm" class="on" style="font-weight:700;">確定</button>
+      </div>
+    </div>
+  </div>
 </div>
 <div id="add-panel" class="add-panel" hidden>
   <div class="slots-head"><b>新增物件</b><button id="add-close" class="toggle" title="關閉">✕</button></div>

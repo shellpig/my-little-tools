@@ -21,11 +21,12 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 ## 當前狀態與下一步
 
 - **P1 全部完成（A1～A3、B、C、D）。** P1-D 第 2 關「火車站」：東西向鐵道貫穿、晴川站與站前廣場、站前旅館與 5 家商店、一般住宅與別墅、南北向馬路的平交道、公車、不具名通勤客（火車到站時人變多）。
-- **下一步：P2 — 輕量 A 列車（只做第 2 關）。** 規格已寫好（`docs/P2/`），尚未開工：玩家買車並用整點班表排班、公車買台數選色、資金與每日結算、公共設施、住宅與商店沿路自動成長、倍速改 1×／10×／60×。
+- **P2-A 已完成必要功能驗證。** 第 2 關已有五種火車的車隊管理、整點班表、回送與誤點等待、1×／10×／60× 倍速及存檔；第 1 關維持原有行為（見 `docs/P2/P2-A實作紀錄.md`）。依使用者要求只驗必要功能，長時間 FPS 比較未列入本次驗收。
+- **下一步：P2-B — Money & Daily Settlement。** 接上資金、買賣車與鋪路計價、每日 06:00 收支結算及無限資金。P2-C～E 的公車購買、公共設施、自動成長與成果顯示仍未開始。
 
 | P2 Subphase | 狀態 |
 |---|---|
-| P2-A — Time Scale & Timetable | 未開始 |
+| P2-A — Time Scale & Timetable | 已完成（必要功能驗證通過） |
 | P2-B — Money & Daily Settlement | 未開始 |
 | P2-C — Buses & Public Facilities | 未開始 |
 | P2-D — Town Growth | 未開始 |
@@ -61,10 +62,21 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 ## 跨 Subphase 約束
 
 - 輕量優先：不做通用關卡編輯器、不做建置流程。
+- 每個 Subphase 在自己的分支 `feat/small-town-<subphase 小寫>` 上做，驗證完、使用者同意後才 merge 回 main；不直接在 main 上實作。
 - 換關一律**重新載入頁面**（不在同一頁拆掉重建場景）；載入存檔也一樣，因此載入後 undo 歷史清空。
 - 第 1 關除了後街北移 0.8 之外，外觀與行為要和 P1 開工前一致（回歸基準）。
 - `.claude/`、`output/` 不 commit。
 - Python 一律用 repo 根目錄的 `.venv`（`.\.venv\Scripts\python.exe`，不 commit）；只用來起站與跑一次性腳本，不裝套件。
+
+## 指揮流程入口
+
+被指定為指揮者（派工給 agy／ChatGPT／Muse）時，派工前一定要先做完 `docs/others/conductor-handbook.md` §2.0 開工前 gate：
+
+1. 文件讀清楚：本檔 → handbook §1、§2、§5、§7 與所選 worker 段落 → 當前 Phase 三份文件裡該 Subphase 的所有對應段 → 該 Subphase 實作紀錄（若有）。不可只讀本檔就派工。
+2. 契約疑點先列給使用者拍板。
+3. 從最新 main 開 Subphase 分支，起始 commit 與分支名寫進實作紀錄。
+
+接手進行中的 Subphase 照 handbook §7。
 
 ## 待決事項
 
@@ -85,6 +97,7 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 | `docs/P2/實作規格.md` | P2 各 Subphase 完成後什麼必須成立 |
 | `docs/P2/開發設計方針.md` | P2 的經營狀態格式、車隊與班表、結算、設施、成長的接線 |
 | `docs/P2/測試指南.md` | P2 各 Subphase 的驗收步驟與證據 |
+| `docs/P2/P2-A實作紀錄.md` | 時間倍速、車隊與班表的派工及驗證進度 |
 | `docs/P1/實作規格.md` | P1 各 Subphase 完成後什麼必須成立 |
 | `docs/P1/開發設計方針.md` | 資料格式、模組、儲存 key、接線 |
 | `docs/P1/測試指南.md` | 各 Subphase 的驗收步驟與證據 |
@@ -94,6 +107,5 @@ Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素�
 | `docs/P1/P1-B實作紀錄.md` | 關卡選單、10 格存檔與匯出入的交付及驗證 |
 | `docs/P1/P1-C實作紀錄.md` | 鐵道、火車與平交道的交付及驗證 |
 | `docs/P1/P1-D實作紀錄.md` | 第 2 關火車站、通勤客與 P1 收尾 |
-| `docs/P1/P1-C實作紀錄.md` | 鐵道、火車與平交道的派工及驗證進度 |
-| `docs/others/conductor-handbook.md` | 指揮外部 worker（agy／ChatGPT／Muse）實作的流程、驗證 gate、審核清單 |
+| `docs/others/conductor-handbook.md` | **指揮者必讀**：派工前 gate（讀文件、拍板疑點、開分支）、指揮外部 worker 的流程、驗證 gate、審核清單 |
 | `docs/others/local-tools.md` | 本機起站、外部 reviewer／worker 的啟動指令 |

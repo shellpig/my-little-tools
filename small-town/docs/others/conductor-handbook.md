@@ -6,7 +6,7 @@
 
 來源：搬自 adventure-table `docs/others/conductor-handbook.md`（2026-10-04 版），worker 操作細節照搬，驗證流程與審核清單改成小鎮（純靜態網頁、無測試框架、瀏覽器實測）。
 
-按角色／工作讀取：指揮者讀 §1、§2、§5、§7，再讀所選 worker 的 §3、§4、§4b 或 §4c；選 worker 時才讀 §6。只建立實作紀錄時讀 §2.4。Windows 指令與外部 CLI 見 [local-tools.md](local-tools.md)。
+按角色／工作讀取：指揮者讀 §1、§2（含 §2.0 開工前 gate）、§5、§7，再讀所選 worker 的 §3、§4、§4b 或 §4c；選 worker 時才讀 §6。只建立實作紀錄時讀 §2.4。Windows 指令與外部 CLI 見 [local-tools.md](local-tools.md)。
 
 ---
 
@@ -15,7 +15,7 @@
 | 角色 | 做什麼 | 不做什麼 |
 |---|---|---|
 | 使用者 | 拍板 step 範圍、選 worker、決定何時停 | 不盯進度（指揮者負責） |
-| 指揮者（本 session） | 讀契約、拆 step、寫 prompt、送出、定時檢查、pull、瀏覽器實測、審 diff、修小錯、commit、push、更新 `<Subphase>實作紀錄.md` | 不重寫 worker 的大段程式（改動超過幾處就退回 worker）；不改 Phase 三份文件（verifier 職權） |
+| 指揮者（本 session） | 讀契約、開 Subphase 分支、拆 step、寫 prompt、送出、定時檢查、pull、瀏覽器實測、審 diff、修小錯、commit、push、更新 `<Subphase>實作紀錄.md`、Subphase 收尾時 merge 回 main | 不重寫 worker 的大段程式（改動超過幾處就退回 worker）；不改 Phase 三份文件（verifier 職權） |
 | worker（agy / ChatGPT / Muse） | 讀指定文件與程式、寫程式、回報 | agy、OpenCode Muse：不得任何 git 寫入；ChatGPT／網頁版 Muse：可 commit + push 到指定 branch，但不得開新 branch / 動 main / force push / rebase |
 
 **commit 權責**：agy 與 OpenCode Muse 的產出由指揮者 commit；ChatGPT 自己 commit（author 是 repo owner，沒有 Co-Authored-By）。指揮者自己的修正另開 commit，訊息寫清楚修了 worker 的什麼。commit 訊息英文 conventional（`feat(small-town): ...`）。
@@ -24,17 +24,29 @@
 
 ## 2. 共通原則（所有 worker 都適用）
 
+### 2.0 開工前 gate（每個 Subphase，寫第一份 prompt 之前）
+
+三項都完成才派工：
+
+1. **文件讀清楚**：`PROJECT_BRIEF.md` → 本檔 §1、§2、§5、§7 與所選 worker 段落 → 當前 Phase 三份文件中該 Subphase 的所有對應段（實作規格的完成條件、開發設計方針的接線、測試指南的必測項）→ 前一個 Subphase 的實作紀錄接手摘要（若有）。不可只讀 brief 或只讀 step 檔就派工。
+2. **疑點先拍板**：契約之間矛盾、缺數值、範圍不清的地方列給使用者，拍板前不派工；指揮者不自行改 Phase 文件（verifier 職權）。
+3. **開分支**：從最新 main 開 `feat/small-town-<subphase 小寫>`（例：`feat/small-town-p2-a`），整個 Subphase 的 commit 都在此分支。ChatGPT／網頁版 Muse 需要 remote branch，經使用者同意後 push 到 origin。起始 commit 與分支名寫進實作紀錄接手摘要。
+
+Subphase 收尾：所有 step 驗證完成、使用者同意後，merge 回 main 並 push；PROJECT_BRIEF.md 的 Subphase 狀態同步更新。
+
 ### 2.1 step 粒度
 
 - **不要過度拆分。** Subphase 可視需要拆成少數大步（例：A1、A2），一步之內不再列子項，也不為子項建紀錄；指揮者以節省自身 token 為準。
-- 單回合有硬性時間上限的 worker（ChatGPT）：一個 step = 15～20 分鐘內能收斂到「瀏覽器可跑、可 commit」的量。大 step 一定失敗，拆小再送。
+- 單回合有硬性時間上限的 worker（ChatGPT；agy 實測約 20 分鐘也會超時）：一個 step = 15～20 分鐘內能收斂到「瀏覽器可跑、可 commit」的量。大 step 一定失敗，拆小再送。
+- **依「要讀的範圍」拆，不依改動行數。** worker 的時間主要花在讀文件、讀程式、想通規則，不是寫。派工前先列出這一步要讀的契約段落與程式區段：跨超過約 2 個互不相干的程式區（例如資料存讀、rail.js 發車、main.js 倍速、index.html 面板），或契約裡有多條互相牽連的邊界規則，就拆成每步只讀一塊。
+  - 教訓（P2-A，2026-10-12）：整個 Subphase 當一步、以「改動超過 3,000 行才拆」為門檻。實際改動只約 1,200～1,800 行，但 worker 要讀約 41 KB 規格、整份 rail.js 與大半個 main.js，agy Flash 光讀就約 15 分鐘，連兩輪 20 分鐘超時只交付一半。根源是規格把資料、班表發車、倍速、UI 四塊放進同一個 Subphase；指揮者派工時也沒再拆。寫 Phase 文件與派工時都要用本條檢查。
 - step 命名接在 Subphase 後面（A1a、A1b…），寫進 `docs/<Phase>/<Subphase>實作紀錄.md` 的「步驟進度」表，這張表是唯一的進度真相；`PROJECT_BRIEF.md` 只記 Subphase。
 
 ### 2.2 prompt 骨架
 
 prompt 寫成檔案，存 `C:\_work\AI_Work\Tools\agy-runs\<worker>-small-town-<step>.prompt.txt`（session 中斷後可從這裡與實作紀錄接手）。固定段落：
 
-1. **身分與狀態**：step 名、branch、HEAD hash、已完成的 step。agy 的第一行固定：「YOU MUST DO THIS STEP YOURSELF. 不得交給 subagent／background task／parallel worker。」
+1. **身分與狀態**：step 名、branch（§2.0 開的 Subphase 分支）、HEAD hash、已完成的 step。agy 的第一行固定：「YOU MUST DO THIS STEP YOURSELF. 不得交給 subagent／background task／parallel worker。」
 2. **MANDATORY READING**：`small-town/PROJECT_BRIEF.md` → 該 Subphase 接手摘要／步驟板與自己的 step 檔 → 三份 Phase 文件對應段 → **要動的每個程式檔（列檔名＋要動的區段名，如 `main.js`「// ---------- traffic ----------」）**。只列要改的檔，不要求整份讀 brief 以外的歷史。續做同一步時不重讀未變更的背景文件，但**寫檔前一定重讀該檔最新內容**。
 3. **SCOPE**：A/B/C… 條列，含驗收方式（瀏覽器裡看到什麼、哪個數值）。
 4. **Do not touch**：明列不可碰的檔案／區段（例如 `assets/`、`wardrobe.js`、與本步無關的 `main.js` 區段）。
@@ -55,7 +67,7 @@ git pull --ff-only（ChatGPT／網頁版 Muse）或 git diff（agy／OpenCode Mu
 → 修小錯（幾行、單一目的）
 → 刪掉暫時的 window.__dbg 等除錯程式
 → 更新 <Subphase>實作紀錄.md 的接手摘要／步驟表＋該 step 詳細紀錄（§2.4）
-→ 截圖給使用者、回報；使用者說 commitpush 才 commit + push
+→ 截圖給使用者、回報；使用者說 commitpush 才 commit + push（commit 在 Subphase 分支，不直接進 main）
 ```
 
 ### 2.4 實作紀錄格式
@@ -277,7 +289,7 @@ document.querySelector('button[aria-label="傳送"]').click();
 ## 7. 接手流程（新指揮者 session）
 
 1. 讀 `small-town/PROJECT_BRIEF.md` → 本檔共通段落與所選 worker 段落 → 當前 Subphase 接手摘要／步驟板（若有）→ 本步及必要前置紀錄。
-2. `git fetch` + `git log origin/main --oneline -5`，確認 remote 與本機一致；有未審的 worker 產出先走 §2.3 gate。
+2. `git fetch` + `git branch --show-current` + `git log --oneline -5`，確認目前在當前 Subphase 分支（沒有就先走 §2.0）、remote 與本機一致；有未審的 worker 產出先走 §2.3 gate。
 3. 看 `C:\_work\AI_Work\Tools\agy-runs\` 最新的 `*-small-town-*` prompt 檔，知道上一步送了什麼。
 4. Muse thread 依 §4b.1 先問使用者；agy conversation id 遺失不影響，開新對話讀實作紀錄即可。
 5. 依所選 worker 的檢查節奏繼續（ChatGPT §4.3、Muse §4b.3）。

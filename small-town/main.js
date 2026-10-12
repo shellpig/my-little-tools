@@ -13,6 +13,10 @@ import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
 import { LEVELS, levelById } from './levels/index.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
+import {
+  TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
+  normalizeP2, validateTimetable, canAssignTrain
+} from './atrain.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
 const ASSETS = 'assets';
@@ -119,6 +123,24 @@ const sortedTiles = obj => Object.keys(obj).sort().map(k => [k, obj[k]]);
 
 const game = readGame();
 const LEVEL = levelById(game.level);
+
+let p2State = null;
+let calDay = 0;
+let clockMinutes = 360;
+let opsDay = 0;
+let nextSettlementMinute = 1800;
+let skipModeActive = false;
+let updateFleetLiveStatus = null;
+
+const initTime = +(new URLSearchParams(location.search).get('t') ?? 6);
+if (LEVEL.atrain) {
+  p2State = normalizeP2(game.layout?.['#p2']);
+  opsDay = p2State.day || 0;
+  calDay = opsDay + (initTime < 6 ? 1 : 0);
+  clockMinutes = calDay * 1440 + initTime * 60;
+  nextSettlementMinute = (opsDay + 1) * 1440 + 360;
+  document.body.classList.add('has-ops');
+}
 
 // Town content comes from the level: buildings, park, gas, lamps, people,
 // cat spots, wishes and the camera.
@@ -898,6 +920,10 @@ async function initRail() {
     LEVEL, CELL, scene, tiles, roads, posts,
     model, place, post, dirOf, headlight,
     onStationStop: burstCommuters,
+    fleet: p2State ? p2State.fleet : undefined,
+    timetable: p2State ? p2State.timetable : undefined,
+    clockMinutes,
+    opsDay,
   });
 }
 
@@ -2460,7 +2486,7 @@ function updateTraffic(dt, activity) {
 
 // ---------- time of day ----------
 
-let time = +(new URLSearchParams(location.search).get('t') ?? 6);
+let time = initTime;
 let speed = 60;
 let lastSpeed = 60;
 
@@ -2576,9 +2602,48 @@ function updateUI() {
   if (!dragging) slider.value = time;
 }
 
+function advanceClock(deltaMinutes) {
+  const prevCalDay = Math.floor(clockMinutes / 1440);
+  clockMinutes += deltaMinutes;
+  calDay = Math.floor(clockMinutes / 1440);
+  if (calDay > prevCalDay) {
+    startNewDay();
+  }
+  time = (clockMinutes % 1440) / 60;
+  while (clockMinutes >= nextSettlementMinute) {
+    opsDay++;
+    if (p2State) p2State.day = opsDay;
+    nextSettlementMinute += 1440;
+    if (rail) rail.onSettlement(opsDay);
+  }
+}
+
+function jumpTime(nextHour) {
+  const normHour = ((nextHour % 24) + 24) % 24;
+  const targetMinutes = calDay * 1440 + normHour * 60;
+  if (targetMinutes >= nextSettlementMinute) {
+    while (nextSettlementMinute <= targetMinutes) nextSettlementMinute += 1440;
+    opsDay = Math.max(opsDay, Math.floor((targetMinutes - 360) / 1440));
+    if (p2State) p2State.day = opsDay;
+  }
+  if (rail) rail.seek(targetMinutes);
+  clockMinutes = targetMinutes;
+  time = normHour;
+  applyTime(time);
+  updateUI();
+}
+
 // Midnight wrapping in the main loop, or a jump backwards from a preset or
 // the slider, turns the game day over: the found cats queue up to hide again.
 function setTime(next, continuous = false) {
+  if (LEVEL.atrain) {
+    if (continuous) {
+      // Natural clock flow handled in frame() via advanceClock
+    } else {
+      jumpTime(next);
+    }
+    return;
+  }
   next %= 24;
   if (next < time) startNewDay();
   time = next;
@@ -3611,6 +3676,9 @@ function currentLayout() {
       layout[item.id] = s;
     }
   }
+  if (LEVEL.atrain && p2State) {
+    layout['#p2'] = p2State;
+  }
   return layout;
 }
 
@@ -4471,15 +4539,67 @@ $('edit-reset').addEventListener('click', () => {
 const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
-  setTime(time + dt * speed / 3600, true);
-  applyTime(time);
   const a = Math.min(1, activity(time) + crowdBoost);
-  if (rail) rail.update(dt, dt * speed, activity(time), player.active ? player.pos : null);
-  if (LEVEL.commuters) updateCommuters(dt);
-  for (const w of walkers) w.update(dt, a);
-  for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
-  updateTraffic(dt, a);
-  updateCats(dt);
+
+  if (LEVEL.atrain) {
+    const rate = speed === 0 ? 0 : speed / 60;
+    if (rate === 60) {
+      if (!skipModeActive) {
+        skipModeActive = true;
+        for (const v of vehicles) v.leave();
+        roads.forEach(node => { node.holder = null; });
+        for (const w of walkers) w.obj.visible = false;
+        for (const c of cats) if (c.obj) c.obj.visible = false;
+      }
+      if (rate > 0) {
+        const totalMins = dt * 60;
+        const steps = Math.max(1, Math.ceil(totalMins / 0.1));
+        const stepMins = totalMins / steps;
+        for (let s = 0; s < steps; s++) {
+          advanceClock(stepMins);
+          if (rail) rail.update(stepMins, player.active ? player.pos : null, clockMinutes, opsDay);
+        }
+      }
+    } else {
+      if (skipModeActive) {
+        skipModeActive = false;
+        for (const v of vehicles) {
+          v.leave();
+          v.cooldown = rand() * 4;
+        }
+        roads.forEach(node => { node.holder = null; });
+        for (const w of walkers) {
+          w.obj.visible = w.rank < activity(time);
+        }
+        for (const c of cats) if (c.obj) c.obj.visible = !c.gone;
+      }
+      if (rate > 0) {
+        const simDt = dt * rate;
+        const steps = Math.max(1, Math.ceil(simDt / 0.1));
+        const stepDt = simDt / steps;
+        for (let s = 0; s < steps; s++) {
+          advanceClock(stepDt);
+          if (rail) rail.update(stepDt, player.active ? player.pos : null, clockMinutes, opsDay);
+          updateTraffic(stepDt, a);
+          for (const w of walkers) w.update(stepDt, a);
+          for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
+          updateCats(stepDt);
+        }
+      }
+    }
+    applyTime(time);
+    if (updateFleetLiveStatus) updateFleetLiveStatus();
+  } else {
+    setTime(time + dt * speed / 3600, true);
+    applyTime(time);
+    if (rail) rail.update(dt, dt * speed, activity(time), player.active ? player.pos : null);
+    if (LEVEL.commuters) updateCommuters(dt);
+    for (const w of walkers) w.update(dt, a);
+    for (let i = walkers.length; i--;) if (walkers[i].done) walkers.splice(i, 1);
+    updateTraffic(dt, a);
+    updateCats(dt);
+  }
+
   if (wishes) wishes.update(dt);
   updatePlayer(dt);
   updateTalk(dt);
@@ -4497,6 +4617,371 @@ await applyLayout();
 await Promise.all([addPeople(), addTraffic()]);
 addCats();
 addWishes();
+// ---------- operations panel (P2-A) ----------
+
+function setupOpsPanel() {
+  if (!LEVEL.atrain || !p2State) return;
+
+  const opsBtn = $('ops');
+  const opsPanel = $('ops-panel');
+  const opsClose = $('ops-close');
+  if (!opsBtn || !opsPanel) return;
+
+  opsBtn.hidden = false;
+
+  function toggleOps(show) {
+    const willShow = show !== undefined ? show : opsPanel.hidden;
+    opsPanel.hidden = !willShow;
+    opsBtn.classList.toggle('on', willShow);
+    if (willShow) {
+      if (typeof setEditing === 'function' && editing) setEditing(false);
+      renderOpsPanel();
+    }
+  }
+
+  opsBtn.addEventListener('click', e => {
+    toggleOps();
+    e.currentTarget.blur();
+  });
+  opsClose.addEventListener('click', () => toggleOps(false));
+
+  function renderOpsPanel() {
+    renderFleetList();
+    renderBuyButtons();
+    renderTimetable();
+  }
+
+  function renderFleetList() {
+    const listEl = $('ops-fleet-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const snap = rail ? rail.snapshot() : null;
+    const snapFleet = snap?.fleet || [];
+
+    for (const train of p2State.fleet) {
+      const card = document.createElement('div');
+      card.className = 'fleet-card';
+
+      const head = document.createElement('div');
+      head.className = 'fleet-card-head';
+
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.maxLength = 12;
+      nameInput.value = train.name;
+      nameInput.title = '點擊修改車名';
+      nameInput.addEventListener('keydown', e => e.stopPropagation());
+      nameInput.addEventListener('change', () => {
+        const val = nameInput.value.trim();
+        if (val) {
+          train.name = val;
+          if (rail) rail.renameTrain(train.id, val);
+          saveLayout();
+          renderTimetable();
+        } else {
+          nameInput.value = train.name;
+        }
+      });
+      head.appendChild(nameInput);
+
+      const snapInfo = snapFleet.find(f => f.id === train.id);
+      const isBusy = snapInfo && (snapInfo.run !== null || snapInfo.isWaiting);
+
+      const sellBtn = document.createElement('button');
+      sellBtn.className = 'fleet-sell-btn';
+      sellBtn.textContent = '出售';
+      sellBtn.disabled = !!isBusy;
+      sellBtn.title = isBusy ? '行駛中或等待中的列車不可出售' : '出售這輛列車（清除其所有班次）';
+      sellBtn.addEventListener('click', () => {
+        const liveSnap = rail ? rail.snapshot() : null;
+        const liveInfo = liveSnap?.fleet?.find(f => f.id === train.id);
+        if (liveInfo && (liveInfo.run !== null || liveInfo.isWaiting)) {
+          alert('行駛中或等待中的列車不可出售');
+          return;
+        }
+        if (!confirm(`確定要出售「${train.name}」？已排班次將一併清除。`)) return;
+        p2State.fleet = p2State.fleet.filter(t => t.id !== train.id);
+        p2State.timetable = p2State.timetable.filter(t => t.train !== train.id);
+        if (rail) {
+          rail.removeTrain(train.id);
+          rail.setTimetable(p2State.timetable);
+        }
+        saveLayout();
+        renderOpsPanel();
+      });
+      head.appendChild(sellBtn);
+      card.appendChild(head);
+
+      const info = document.createElement('div');
+      info.className = 'fleet-card-info';
+
+      const typeSpan = document.createElement('span');
+      const tdef = isValidTrainType(train?.type) ? TRAIN_TYPES[train.type] : TRAIN_TYPES.local;
+      typeSpan.textContent = `${tdef.name} · 速 ${tdef.speed}× · 限 ${tdef.seats}人`;
+      info.appendChild(typeSpan);
+
+      const statusSpan = document.createElement('span');
+      statusSpan.className = 'fleet-status';
+      if (snapInfo) {
+        if (snapInfo.isWaiting) {
+          statusSpan.textContent = `等待進入軌道（${snapInfo.run ? snapInfo.run.hour + ':00' : ''}）`;
+          statusSpan.style.color = '#ff9999';
+        } else if (snapInfo.run) {
+          statusSpan.textContent = `行駛中（${snapInfo.run.hour}:00 往${snapInfo.run.dir === 'east' ? '東' : '西'}）`;
+          statusSpan.style.color = '#ffd27a';
+        } else {
+          statusSpan.textContent = `待命（${snapInfo.at === 'west' ? '西端' : '東端'}）`;
+        }
+      } else {
+        statusSpan.textContent = '待命中';
+      }
+      info.appendChild(statusSpan);
+      card.appendChild(info);
+      listEl.appendChild(card);
+    }
+  }
+
+  updateFleetLiveStatus = function() {
+    if (!opsPanel || opsPanel.hidden) return;
+    const snap = rail ? rail.snapshot() : null;
+    const snapFleet = snap?.fleet || [];
+    const listEl = $('ops-fleet-list');
+    if (!listEl) return;
+    const cards = listEl.children;
+    for (let i = 0; i < p2State.fleet.length; i++) {
+      const train = p2State.fleet[i];
+      const card = cards[i];
+      if (!card) continue;
+      const snapInfo = snapFleet.find(f => f.id === train.id);
+      const isBusy = snapInfo && (snapInfo.run !== null || snapInfo.isWaiting);
+      const sellBtn = card.querySelector('.fleet-sell-btn');
+      if (sellBtn) {
+        sellBtn.disabled = !!isBusy;
+        sellBtn.title = isBusy ? '行駛中或等待中的列車不可出售' : '出售這輛列車（清除其所有班次）';
+      }
+      const statusSpan = card.querySelector('.fleet-status');
+      if (statusSpan && snapInfo) {
+        if (snapInfo.isWaiting) {
+          statusSpan.textContent = `等待進入軌道（${snapInfo.run ? snapInfo.run.hour + ':00' : ''}）`;
+          statusSpan.style.color = '#ff9999';
+        } else if (snapInfo.run) {
+          statusSpan.textContent = `行駛中（${snapInfo.run.hour}:00 往${snapInfo.run.dir === 'east' ? '東' : '西'}）`;
+          statusSpan.style.color = '#ffd27a';
+        } else {
+          statusSpan.textContent = `待命（${snapInfo.at === 'west' ? '西端' : '東端'}）`;
+          statusSpan.style.color = '';
+        }
+      }
+    }
+  };
+
+  function renderBuyButtons() {
+    const buyBox = $('ops-buy-buttons');
+    if (!buyBox) return;
+    buyBox.innerHTML = '';
+    for (const [typeKey, tdef] of Object.entries(TRAIN_TYPES)) {
+      const btn = document.createElement('button');
+      btn.textContent = `+ ${tdef.name}`;
+      btn.title = `購買 ${tdef.name}（速度 ${tdef.speed}×，載客 ${tdef.seats} 人）`;
+      btn.addEventListener('click', async () => {
+        const count = p2State.fleet.filter(t => t.type === typeKey).length + 1;
+        const newTrain = {
+          id: 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          name: `${tdef.name} ${count} 號`,
+          type: typeKey,
+        };
+        p2State.fleet.push(newTrain);
+        if (rail) await rail.addTrain(newTrain);
+        saveLayout();
+        renderOpsPanel();
+      });
+      buyBox.appendChild(btn);
+    }
+  }
+
+  function renderTimetable() {
+    const wrap = $('ops-timetable');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+
+    const validation = validateTimetable(p2State.fleet, p2State.timetable);
+    const table = document.createElement('table');
+    table.className = 'tt-table';
+
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th style="width:55px;">時間</th><th>往東（南線）</th><th>往西（北線）</th></tr>';
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    const fleetMap = new Map(p2State.fleet.map(t => [t.id, t]));
+
+    for (let h = 0; h < 24; h++) {
+      const tr = document.createElement('tr');
+
+      const th = document.createElement('th');
+      th.textContent = `${h < 10 ? '0' : ''}${h}:00`;
+      tr.appendChild(th);
+
+      for (const dir of ['east', 'west']) {
+        const td = document.createElement('td');
+        const cell = document.createElement('div');
+        cell.className = 'tt-cell';
+        cell.dataset.hour = h;
+        cell.dataset.dir = dir;
+
+        const tripKey = `${h}_${dir}`;
+        const trip = p2State.timetable.find(t => t.hour === h && t.dir === dir);
+        const err = validation.errors.get(tripKey);
+
+        if (trip) {
+          const train = fleetMap.get(trip.train);
+          const trainName = train ? train.name : '未知列車';
+          cell.textContent = `${trainName} · ${trip.stop ? '停' : '過'}`;
+          cell.classList.add('assigned');
+          if (err) {
+            cell.classList.add('error');
+            cell.title = `⚠️ ${err}`;
+          } else {
+            cell.title = `${trainName}（${trip.stop ? '停靠晴川站' : '通過不停'}）`;
+          }
+        } else {
+          cell.textContent = '—';
+          cell.title = '點擊排定班次';
+        }
+
+        cell.addEventListener('click', () => openCellModal(h, dir));
+        td.appendChild(cell);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+  }
+
+  let modalHour = 0;
+  let modalDir = 'east';
+  let modalSelectedTrain = null;
+  let modalStop = true;
+
+  function openCellModal(hour, dir) {
+    modalHour = hour;
+    modalDir = dir;
+    const modal = $('ops-cell-modal');
+    if (!modal) return;
+
+    $('ops-modal-title').textContent = `設定 ${hour < 10 ? '0' : ''}${hour}:00 往${dir === 'east' ? '東' : '西'} 班次`;
+
+    const existing = p2State.timetable.find(t => t.hour === hour && t.dir === dir);
+    modalStop = existing ? !!existing.stop : true;
+    modalSelectedTrain = existing ? existing.train : (p2State.fleet[0]?.id || null);
+
+    updateModalStopUI();
+    renderModalTrains();
+    modal.hidden = false;
+  }
+
+  function updateModalStopUI() {
+    $('ops-modal-stop-true').classList.toggle('on', modalStop);
+    $('ops-modal-stop-false').classList.toggle('on', !modalStop);
+  }
+
+  $('ops-modal-stop-true')?.addEventListener('click', () => {
+    modalStop = true;
+    updateModalStopUI();
+    renderModalTrains();
+  });
+  $('ops-modal-stop-false')?.addEventListener('click', () => {
+    modalStop = false;
+    updateModalStopUI();
+    renderModalTrains();
+  });
+
+  function renderModalTrains() {
+    const container = $('ops-modal-trains');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!p2State.fleet.length) {
+      container.innerHTML = '<span style="color:var(--dim);font-size:13px;">目前車隊無列車，請先購買車輛。</span>';
+      return;
+    }
+
+    for (const train of p2State.fleet) {
+      const btn = document.createElement('button');
+      btn.style.textAlign = 'left';
+      btn.style.padding = '8px 12px';
+
+      const check = canAssignTrain(p2State.fleet, p2State.timetable, modalHour, modalDir, train.id, modalStop);
+      const isCurrentSelected = modalSelectedTrain === train.id;
+
+      if (isCurrentSelected) btn.classList.add('on');
+
+      const nameSpan = document.createElement('div');
+      nameSpan.style.fontWeight = '700';
+      nameSpan.textContent = train.name;
+      btn.appendChild(nameSpan);
+
+      const descSpan = document.createElement('div');
+      descSpan.style.fontSize = '12px';
+      const tdef = isValidTrainType(train?.type) ? TRAIN_TYPES[train.type] : TRAIN_TYPES.local;
+
+      if (!check.valid) {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        descSpan.textContent = `不可選：${check.reason}`;
+        descSpan.style.color = '#ff9999';
+      } else {
+        descSpan.textContent = `${tdef.name} · 可排班`;
+        descSpan.style.color = 'var(--dim)';
+        btn.addEventListener('click', () => {
+          modalSelectedTrain = train.id;
+          renderModalTrains();
+        });
+      }
+      btn.appendChild(descSpan);
+      container.appendChild(btn);
+    }
+  }
+
+  $('ops-modal-close')?.addEventListener('click', () => {
+    $('ops-cell-modal').hidden = true;
+  });
+
+  $('ops-modal-clear')?.addEventListener('click', () => {
+    p2State.timetable = p2State.timetable.filter(t => !(t.hour === modalHour && t.dir === modalDir));
+    if (rail) rail.setTimetable(p2State.timetable);
+    saveLayout();
+    $('ops-cell-modal').hidden = true;
+    renderTimetable();
+  });
+
+  $('ops-modal-confirm')?.addEventListener('click', () => {
+    if (!modalSelectedTrain) {
+      $('ops-cell-modal').hidden = true;
+      return;
+    }
+    const check = canAssignTrain(p2State.fleet, p2State.timetable, modalHour, modalDir, modalSelectedTrain, modalStop);
+    if (!check.valid) {
+      alert(`無法指派此列車：${check.reason}`);
+      return;
+    }
+    const remaining = p2State.timetable.filter(t => !(t.hour === modalHour && t.dir === modalDir));
+    remaining.push({
+      train: modalSelectedTrain,
+      dir: modalDir,
+      hour: modalHour,
+      stop: modalStop,
+    });
+    p2State.timetable = remaining;
+    if (rail) rail.setTimetable(p2State.timetable);
+    saveLayout();
+    $('ops-cell-modal').hidden = true;
+    renderTimetable();
+  });
+}
+
 await addWardrobe();
+setupOpsPanel();
 $('loading').classList.add('done');
 frame();

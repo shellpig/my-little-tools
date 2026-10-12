@@ -3,6 +3,7 @@
 // this module beyond a null check. All randomness here uses Math.random so
 // the town's seeded rand() order is untouched.
 import * as THREE from 'three';
+import { TRAIN_TYPES, isValidTrainType, getApproachMinutes, getTripDuration, validateTimetable } from './atrain.js';
 
 // Measured Kenney Train Kit 1.1 geometry, in model units:
 // - railroad-straight spans z 0..4 (track x -0.35..0.35, bed y 0..0.1)
@@ -264,6 +265,9 @@ export async function buildRail(ctx) {
   // between bodies through bends.
   async function buildSet(setNames, cruise, stops, laneStationS) {
     const units = [];
+    if (!Array.isArray(setNames)) {
+      setNames = TRAIN_TYPES.local.units;
+    }
     for (const n of setNames) {
       const gltf = await ctx.model('train-kit', n);
       const obj = gltf.scene.clone(true);
@@ -292,12 +296,89 @@ export async function buildRail(ctx) {
     const stopS = laneStationS === null || !stops ? null : laneStationS + trainLen / 2 - units[0].front;
     return { units, offsets, trainLen, stopS, cruise };
   }
-  let maxTrainLen = 0;
-  for (const lane of directions) {
-    lane.local = await buildSet(names, TRAIN_CRUISE, true, lane.stationS);
-    lane.fast = express ? await buildSet(express.train, TRAIN_CRUISE * (express.speed || 1), false, lane.stationS) : null;
-    maxTrainLen = Math.max(maxTrainLen, lane.local.trainLen, lane.fast ? lane.fast.trainLen : 0);
+  const isAtrain = !!ctx.LEVEL.atrain;
+  const fleetMap = new Map();
+  let maxTrainLen = 3.6;
+
+  if (isAtrain) {
+    const fleetData = (ctx.fleet || ctx.LEVEL.fleet || []).filter(f => f && typeof f === 'object');
+    for (const f of fleetData) {
+      const tdef = isValidTrainType(f.type) ? TRAIN_TYPES[f.type] : TRAIN_TYPES.local;
+      const consist = await buildSet(tdef.units, TRAIN_CRUISE * tdef.speed, true, null);
+      maxTrainLen = Math.max(maxTrainLen, consist.trainLen);
+      fleetMap.set(f.id, {
+        id: f.id,
+        name: f.name || tdef.name,
+        type: f.type,
+        consist,
+        at: 'west',
+        busyUntil: -99999,
+        run: null,
+      });
+    }
+  } else {
+    for (const lane of directions) {
+      lane.local = await buildSet(names, TRAIN_CRUISE, true, lane.stationS);
+      lane.fast = express ? await buildSet(express.train, TRAIN_CRUISE * (express.speed || 1), false, lane.stationS) : null;
+      maxTrainLen = Math.max(maxTrainLen, lane.local.trainLen, lane.fast ? lane.fast.trainLen : 0);
+    }
   }
+
+  let timetable = [...(ctx.timetable || ctx.LEVEL.timetable || [])];
+  let clockMinutes = ctx.clockMinutes !== undefined ? ctx.clockMinutes : 360;
+  let opsDay = ctx.opsDay !== undefined ? ctx.opsDay : 0;
+  const ranMap = new Map();
+  ranMap.set(opsDay, new Map());
+  const backhauls = [];
+  const cancels = [];
+
+  for (const lane of directions) {
+    lane.waitingQueue = [];
+  }
+
+  function initSingleTrainPosition(train, startMinute) {
+    const trips = timetable.filter(t => t.train === train.id);
+    if (!trips.length) {
+      train.at = 'west';
+      train.busyUntil = -99999;
+      return;
+    }
+    let best = null;
+    let minDiff = Infinity;
+    for (const t of trips) {
+      const arr = opsDay * 1440 + (t.hour >= 6 ? t.hour : 24 + t.hour) * 60;
+      let diff = arr - startMinute;
+      while (diff < 0) diff += 1440;
+      if (diff < minDiff) {
+        minDiff = diff;
+        best = t;
+      }
+    }
+    train.at = (best && best.dir === 'east') ? 'west' : 'east';
+    train.busyUntil = -99999;
+  }
+
+  function initFleetPositions(startMinute) {
+    for (const train of fleetMap.values()) {
+      initSingleTrainPosition(train, startMinute);
+    }
+    for (const targetDay of [opsDay, opsDay + 1]) {
+      if (!ranMap.has(targetDay)) ranMap.set(targetDay, new Map());
+      const dayRan = ranMap.get(targetDay);
+      for (const t of timetable) {
+        const trainObj = fleetMap.get(t.train);
+        if (!trainObj) continue;
+        const app = getApproachMinutes(trainObj.type, t.dir, t.stop);
+        const arr = targetDay * 1440 + (t.hour >= 6 ? t.hour : 24 + t.hour) * 60;
+        const entry = arr - app;
+        const key = t.hour + '_' + t.dir;
+        if (entry < startMinute && !dayRan.has(key)) {
+          dayRan.set(key, 'missed');
+        }
+      }
+    }
+  }
+  if (isAtrain) initFleetPositions(clockMinutes);
 
   // Keep the whole visible consist on track during its approach and exit.
   for (const lane of directions) {
@@ -335,8 +416,30 @@ export async function buildRail(ctx) {
     return m;
   };
   const crossings = [];
+  function launchAtrain(lane, trainObj, trip) {
+    const { consist } = trainObj;
+    const tdef = isValidTrainType(trainObj?.type) ? TRAIN_TYPES[trainObj.type] : TRAIN_TYPES.local;
+    const cruise = TRAIN_CRUISE * tdef.speed;
+    const stopS = trip.stop ? (lane.stationS + consist.trainLen / 2 - consist.units[0].front) : null;
+    lane.train = {
+      trainObj,
+      trip,
+      set: { ...consist, stopS, cruise },
+      cruise,
+      stopS,
+      s: 0,
+      speed: 0,
+      dwelled: !trip.stop,
+      waitT: 0,
+    };
+    trainObj.run = trip;
+    for (const u of consist.units) u.obj.visible = true;
+  }
   const rail = {
-    line, units: directions[0].local.units, crossings,
+    line,
+    units: directions[0].local?.units || [...fleetMap.values()][0]?.consist.units || [],
+    crossings,
+    fleet: fleetMap,
     directions: Object.fromEntries(directions.map(d => [d.id, d])),
     get train() { return directions[0].train; },
     set train(value) { directions[0].train = value; },
@@ -464,28 +567,187 @@ export async function buildRail(ctx) {
       }
       return false;
     },
-    update(dt, gameDt, actNow, playerPos) {
-      if (!Number.isFinite(dt) || dt < 0) dt = 0;
-      if (!Number.isFinite(gameDt) || gameDt < 0) gameDt = 0;
-      if (!gameDt) return;
-      // Each direction owns its timetable and its own model instances.
-      for (const lane of directions) {
-        if (!lane.train) {
-          lane.nextIn -= gameDt;
-          if (lane.nextIn <= 0) {
-            lane.departures++;
-            const set = lane.fast && lane.departures % (express.every || 4) === 0 ? lane.fast : lane.local;
-            lane.train = { set, s: 0, speed: 0, dwelled: set.stopS === null, waitT: 0 };
-            for (const u of set.units) u.obj.visible = true;
+
+    update(arg0, arg1, arg2, arg3) {
+      if (!isAtrain) {
+        let dt = arg0;
+        let gameDt = arg1;
+        let actNow = arg2;
+        let playerPos = arg3;
+        if (!Number.isFinite(dt) || dt < 0) dt = 0;
+        if (!Number.isFinite(gameDt) || gameDt < 0) gameDt = 0;
+        if (!gameDt) return;
+        for (const lane of directions) {
+          if (!lane.train) {
+            lane.nextIn -= gameDt;
+            if (lane.nextIn <= 0) {
+              lane.departures++;
+              const set = lane.fast && lane.departures % (express.every || 4) === 0 ? lane.fast : lane.local;
+              lane.train = { set, s: 0, speed: 0, dwelled: set.stopS === null, waitT: 0 };
+              for (const u of set.units) u.obj.visible = true;
+            }
+          }
+          const t = lane.train;
+          if (!t) continue;
+          const { units, offsets, trainLen, stopS } = t.set;
+          const nose = t.s + units[0].front;
+          let target = t.set.cruise;
+          if (!t.dwelled && stopS !== null && t.s < stopS + 0.5) {
+            target = Math.min(target, t.s <= stopS ? Math.sqrt(Math.max(stopS - t.s, 0)) : 0);
+          }
+          if (playerPos) {
+            const proj = projectOnto(lane.line, playerPos.x, playerPos.z);
+            const blockRadius = dualTrack ? Math.max(0, requestedOffset - 0.02) : 0.5;
+            const gap = proj.s - nose;
+            if (proj.d < blockRadius && gap > -0.2) {
+              const stop = Math.sqrt(Math.max(gap - 0.3, 0));
+              if (gap < t.speed * t.speed / (2 * TRAIN_BRAKE) + 0.6) target = Math.min(target, stop);
+            }
+          }
+          if (t.waitT > 0) {
+            t.waitT -= dt;
+            t.speed = 0;
+          } else {
+            t.speed += THREE.MathUtils.clamp(target - t.speed, -TRAIN_BRAKE * dt, TRAIN_ACCEL * dt);
+            if (!Number.isFinite(t.speed) || t.speed < 0) t.speed = 0;
+            t.s += t.speed * dt;
+          }
+          if (!t.dwelled && stopS !== null && Math.abs(t.s - stopS) < 0.06 && t.speed < 0.1) {
+            t.s = stopS;
+            t.speed = 0;
+            t.dwelled = true;
+            t.waitT = TRAIN_DWELL;
+            if (ctx.onStationStop) ctx.onStationStop();
+          }
+          for (let k = 0; k < units.length; k++) {
+            const q = pointAt(lane.line, t.s - offsets[k]);
+            units[k].obj.position.set(q.x, RAIL_TOP, q.z);
+            units[k].obj.rotation.y = Math.atan2(q.tx, q.tz);
+          }
+          const tail = t.s - (trainLen - units[0].front);
+          if (tail > lane.line.length) {
+            lane.train = null;
+            for (const u of units) u.obj.visible = false;
+            const a = Math.max(Number.isFinite(actNow) ? actNow : 1, 0.15);
+            lane.lastGap = (every[0] + Math.random() * (every[1] - every[0])) / a;
+            lane.nextIn = lane.lastGap;
           }
         }
+        for (const c of crossings) {
+          let shut = false;
+          for (const lane of directions) {
+            const t = lane.train;
+            if (!t) continue;
+            const { units, trainLen, cruise } = t.set;
+            const nose = t.s + units[0].front;
+            const tail = t.s - (trainLen - units[0].front);
+            const crossingS = c.sByDirection[lane.id] ?? c.s;
+            if (nose > crossingS - GATE_WARN * cruise / TRAIN_CRUISE
+              && tail < crossingS + ctx.CELL / 2 + 0.05) {
+              shut = true;
+              break;
+            }
+          }
+          c.closed = shut;
+          c.armT = THREE.MathUtils.clamp(c.armT + (shut ? dt : -dt) / GATE_TIME, 0, 1);
+          const lift = (1 - c.armT) * 1.4;
+          for (const pivot of c.arms) pivot.rotation.z = lift;
+        }
+        return;
+      }
+
+      // Atrain mode
+      const dt = Number.isFinite(arg0) && arg0 > 0 ? arg0 : 0;
+      if (!dt) return;
+      let playerPos = null;
+      let extClock = undefined;
+      let extDay = undefined;
+
+      if (arg1 && typeof arg1.x === 'number') playerPos = arg1;
+      else if (arg3 && typeof arg3.x === 'number') playerPos = arg3;
+
+      if (typeof arg2 === 'number') extClock = arg2;
+      if (typeof arg3 === 'number') extDay = arg3;
+
+      if (extClock !== undefined && Number.isFinite(extClock)) {
+        clockMinutes = extClock;
+      } else {
+        clockMinutes += dt;
+      }
+      if (extDay !== undefined && Number.isFinite(extDay)) {
+        opsDay = extDay;
+      }
+
+      // Check timetable dispatch
+      const validation = validateTimetable([...fleetMap.values()], timetable);
+      for (const targetDay of [opsDay, opsDay + 1]) {
+        if (!ranMap.has(targetDay)) ranMap.set(targetDay, new Map());
+        const dayRan = ranMap.get(targetDay);
+        const dayBase = targetDay * 1440;
+        for (const t of timetable) {
+          const tripKey = t.hour + '_' + t.dir;
+          if (dayRan.has(tripKey)) continue;
+          if (validation.errors.has(tripKey)) continue;
+
+          const trainObj = fleetMap.get(t.train);
+          if (!trainObj || !isValidTrainType(trainObj.type)) continue;
+
+          const approach = getApproachMinutes(trainObj.type, t.dir, t.stop);
+          const arrivalMinute = dayBase + (t.hour >= 6 ? t.hour : 24 + t.hour) * 60;
+          const entryMinute = arrivalMinute - approach;
+
+          if (clockMinutes >= entryMinute) {
+            if (entryMinute < clockMinutes - Math.max(dt * 3, 2.0)) {
+              dayRan.set(tripKey, 'missed');
+              continue;
+            }
+            const lane = t.dir === 'east' ? directions[0] : directions[1];
+            const isWaiting = lane.waitingQueue.some(q => q.trainObj.id === trainObj.id);
+
+            // 1. Train busy running or in waiting queue -> cancel later trip
+            if (trainObj.run !== null || isWaiting) {
+              dayRan.set(tripKey, 'cancel');
+              cancels.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'cancel', reason: 'train_busy' });
+              continue;
+            }
+
+            // 2. Check source end
+            const reqSource = t.dir === 'east' ? 'west' : 'east';
+            if (trainObj.at !== reqSource) {
+              const idle = clockMinutes - trainObj.busyUntil;
+              const backhaulDir = reqSource === 'west' ? 'west' : 'east';
+              const dur = getTripDuration(trainObj.type, backhaulDir, false);
+              if (idle >= dur) {
+                // Backhaul off-map
+                trainObj.at = reqSource;
+                backhauls.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'backhaul' });
+              } else {
+                dayRan.set(tripKey, 'cancel');
+                cancels.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'cancel', reason: 'not_idle_enough' });
+                continue;
+              }
+            }
+
+            // 3. Track exclusivity
+            if (lane.train !== null) {
+              lane.waitingQueue.push({ trainObj, trip: t, day: targetDay });
+              trainObj.run = t;
+              dayRan.set(tripKey, 'waiting');
+            } else {
+              launchAtrain(lane, trainObj, t);
+              dayRan.set(tripKey, 'run');
+            }
+          }
+        }
+      }
+
+      // Move active trains in both directions
+      for (const lane of directions) {
         const t = lane.train;
         if (!t) continue;
-        const { units, offsets, trainLen, stopS } = t.set;
+        const { units, trainLen, stopS } = t.set;
         const nose = t.s + units[0].front;
-        let target = t.set.cruise;
-        // Coarse frames may carry the nose a hair past the mark, so keep
-        // braking just beyond it and snap back: the correction is invisible.
+        let target = t.cruise;
         if (!t.dwelled && stopS !== null && t.s < stopS + 0.5) {
           target = Math.min(target, t.s <= stopS ? Math.sqrt(Math.max(stopS - t.s, 0)) : 0);
         }
@@ -514,32 +776,37 @@ export async function buildRail(ctx) {
           if (ctx.onStationStop) ctx.onStationStop();
         }
         for (let k = 0; k < units.length; k++) {
-          const q = pointAt(lane.line, t.s - offsets[k]);
+          const q = pointAt(lane.line, t.s - t.set.offsets[k]);
           units[k].obj.position.set(q.x, RAIL_TOP, q.z);
           units[k].obj.rotation.y = Math.atan2(q.tx, q.tz);
         }
         const tail = t.s - (trainLen - units[0].front);
         if (tail > lane.line.length) {
-          lane.train = null;
           for (const u of units) u.obj.visible = false;
-          const a = Math.max(Number.isFinite(actNow) ? actNow : 1, 0.15);
-          lane.lastGap = (every[0] + Math.random() * (every[1] - every[0])) / a;
-          lane.nextIn = lane.lastGap;
+          t.trainObj.at = t.trip.dir === 'east' ? 'east' : 'west';
+          t.trainObj.busyUntil = clockMinutes;
+          t.trainObj.run = null;
+          lane.train = null;
+          if (lane.waitingQueue.length > 0) {
+            const next = lane.waitingQueue.shift();
+            launchAtrain(lane, next.trainObj, next.trip);
+            const targetRan = ranMap.get(next.day) || currentRan;
+            targetRan.set(next.trip.hour + '_' + next.trip.dir, 'run');
+          }
         }
       }
-      // A shared gate stays down for either approaching consist and rises
-      // only after every direction's tail clears the crossing.
+
+      // Crossing barriers
       for (const c of crossings) {
         let shut = false;
         for (const lane of directions) {
           const t = lane.train;
           if (!t) continue;
-          const { units, trainLen, cruise } = t.set;
+          const { units, trainLen } = t.set;
           const nose = t.s + units[0].front;
           const tail = t.s - (trainLen - units[0].front);
           const crossingS = c.sByDirection[lane.id] ?? c.s;
-          // A faster set warns from farther out, for the same lead time.
-          if (nose > crossingS - GATE_WARN * cruise / TRAIN_CRUISE
+          if (nose > crossingS - GATE_WARN * t.cruise / TRAIN_CRUISE
             && tail < crossingS + ctx.CELL / 2 + 0.05) {
             shut = true;
             break;
@@ -551,11 +818,173 @@ export async function buildRail(ctx) {
         for (const pivot of c.arms) pivot.rotation.z = lift;
       }
     },
-    // Plain data for evidence: nothing here moves the town.
+    seek(targetMinutes) {
+      if (!isAtrain) return;
+      for (const lane of directions) {
+        if (lane.train) {
+          const t = lane.train;
+          for (const u of t.set.units) u.obj.visible = false;
+          t.trainObj.at = t.trip.dir === 'east' ? 'east' : 'west';
+          t.trainObj.busyUntil = targetMinutes;
+          t.trainObj.run = null;
+          lane.train = null;
+        }
+        for (const q of lane.waitingQueue) {
+          q.trainObj.run = null;
+        }
+        lane.waitingQueue.length = 0;
+      }
+      if (targetMinutes > clockMinutes) {
+        for (const targetDay of [opsDay, opsDay + 1]) {
+          if (!ranMap.has(targetDay)) ranMap.set(targetDay, new Map());
+          const dayRan = ranMap.get(targetDay);
+          const dayBase = targetDay * 1440;
+          for (const t of timetable) {
+            const tripKey = t.hour + '_' + t.dir;
+            if (dayRan.has(tripKey)) continue;
+            const trainObj = fleetMap.get(t.train);
+            if (!trainObj) continue;
+            const approach = getApproachMinutes(trainObj.type, t.dir, t.stop);
+            const arrivalMinute = dayBase + (t.hour >= 6 ? t.hour : 24 + t.hour) * 60;
+            const entryMinute = arrivalMinute - approach;
+            if (entryMinute >= clockMinutes && entryMinute < targetMinutes) {
+              dayRan.set(tripKey, 'missed');
+            }
+          }
+        }
+      }
+      clockMinutes = targetMinutes;
+    },
+    clearDaily(newDay) {
+      this.onSettlement(newDay);
+    },
+    onSettlement(newDay) {
+      opsDay = newDay;
+      if (!ranMap.has(newDay)) ranMap.set(newDay, new Map());
+      for (const day of ranMap.keys()) {
+        if (day < newDay - 1) ranMap.delete(day);
+      }
+    },
+    async addTrain(trainData) {
+      const tdef = isValidTrainType(trainData.type) ? TRAIN_TYPES[trainData.type] : TRAIN_TYPES.local;
+      const consist = await buildSet(tdef.units, TRAIN_CRUISE * tdef.speed, true, null);
+      const trainObj = {
+        id: trainData.id,
+        name: trainData.name,
+        type: trainData.type,
+        consist,
+        at: 'west',
+        busyUntil: -99999,
+        run: null,
+      };
+      fleetMap.set(trainData.id, trainObj);
+      initSingleTrainPosition(trainObj, clockMinutes);
+      return trainObj;
+    },
+    removeTrain(trainId) {
+      const trainObj = fleetMap.get(trainId);
+      if (!trainObj) return;
+      for (const lane of directions) {
+        if (lane.train && lane.train.trainObj.id === trainId) {
+          for (const u of lane.train.set.units) u.obj.visible = false;
+          lane.train = null;
+          if (lane.waitingQueue && lane.waitingQueue.length > 0) {
+            const next = lane.waitingQueue.shift();
+            launchAtrain(lane, next.trainObj, next.trip);
+            const currentRan = ranMap.get(next.day) || ranMap.get(opsDay);
+            if (currentRan) currentRan.set(next.trip.hour + '_' + next.trip.dir, 'run');
+          }
+        }
+        if (lane.waitingQueue) lane.waitingQueue = lane.waitingQueue.filter(q => q.trainObj.id !== trainId);
+      }
+      for (const u of trainObj.consist.units) {
+        ctx.scene.remove(u.obj);
+      }
+      fleetMap.delete(trainId);
+      timetable = timetable.filter(t => t.train !== trainId);
+    },
+    renameTrain(trainId, newName) {
+      const trainObj = fleetMap.get(trainId);
+      if (trainObj) trainObj.name = newName;
+    },
+    setTimetable(newTimetable) {
+      timetable = [...newTimetable];
+      for (const t of fleetMap.values()) {
+        if (t.busyUntil <= -90000 && t.run === null) {
+          initSingleTrainPosition(t, clockMinutes);
+        }
+      }
+      for (const targetDay of [opsDay, opsDay + 1]) {
+        if (!ranMap.has(targetDay)) ranMap.set(targetDay, new Map());
+        const dayRan = ranMap.get(targetDay);
+        const dayBase = targetDay * 1440;
+        for (const t of timetable) {
+          const tripKey = t.hour + '_' + t.dir;
+          if (dayRan.has(tripKey)) continue;
+          const trainObj = fleetMap.get(t.train);
+          if (!trainObj) continue;
+          const approach = getApproachMinutes(trainObj.type, t.dir, t.stop);
+          const arrivalMinute = dayBase + (t.hour >= 6 ? t.hour : 24 + t.hour) * 60;
+          const entryMinute = arrivalMinute - approach;
+          if (entryMinute < clockMinutes) {
+            dayRan.set(tripKey, 'missed');
+          }
+        }
+      }
+    },
     snapshot() {
+      if (isAtrain) {
+        const fleetSnap = [...fleetMap.values()].map(t => ({
+          id: t.id,
+          name: t.name,
+          type: t.type,
+          at: t.at,
+          busyUntil: t.busyUntil,
+          run: t.run ? { hour: t.run.hour, dir: t.run.dir, stop: t.run.stop } : null,
+          isWaiting: directions.some(d => d.waitingQueue.some(q => q.trainObj.id === t.id)),
+        }));
+        const snapshotDirection = lane => {
+          const t = lane.train;
+          const units = t ? t.set.units : null;
+          return {
+            active: !!t,
+            s: t ? t.s : null,
+            speed: t ? t.speed : null,
+            dwelled: t ? t.dwelled : null,
+            waitT: t ? t.waitT : null,
+            nose: t && units[0] ? t.s + units[0].front : null,
+            tail: t ? t.s - (t.set.trainLen - units[0].front) : null,
+            lineLength: lane.line.length,
+            stationS: lane.stationS,
+            waitingCount: lane.waitingQueue.length,
+            train: t ? { trainId: t.trainObj.id, hour: t.trip.hour, dir: t.trip.dir, stop: t.trip.stop } : null,
+          };
+        };
+        const crossingSnapshots = crossings.map(c => ({
+          key: c.key, x: c.x, z: c.z, s: c.s, sByDirection: c.sByDirection,
+          closed: c.closed, armT: c.armT,
+        }));
+        const currentRan = {};
+        for (const [day, map] of ranMap.entries()) {
+          currentRan[day] = Object.fromEntries(map);
+        }
+        return {
+          dualTrack: true,
+          active: directions.some(d => !!d.train),
+          fleet: fleetSnap,
+          directions: Object.fromEntries(directions.map(d => [d.id, snapshotDirection(d)])),
+          crossings: crossingSnapshots,
+          ran: currentRan,
+          backhauls: [...backhauls],
+          cancels: [...cancels],
+        };
+      }
       const snapshotDirection = lane => {
         const t = lane.train;
-        const { units, offsets, trainLen } = t ? t.set : lane.local;
+        const set = t ? t.set : lane.local;
+        const units = set ? set.units : [];
+        const offsets = set ? set.offsets : [];
+        const trainLen = set ? set.trainLen : 0;
         return {
           active: !!t,
           s: t ? t.s : null,
@@ -563,7 +992,7 @@ export async function buildRail(ctx) {
           dwelled: t ? t.dwelled : null,
           waitT: t ? t.waitT : null,
           nose: t ? t.s + units[0].front : null,
-          tail: t ? t.s - (trainLen - units[0].front) : null,
+          tail: t && units[0] ? t.s - (trainLen - units[0].front) : null,
           lineLength: lane.line.length,
           stationS: lane.stationS,
           express: t ? t.set === lane.fast : null,
@@ -587,6 +1016,9 @@ export async function buildRail(ctx) {
         };
       }
       return { ...snapshotDirection(directions[0]), crossings: crossingSnapshots };
+    },
+    debug() {
+      return this.snapshot();
     },
   };
   // A plain platform slab east (or as sided) of the stopping cell: the
