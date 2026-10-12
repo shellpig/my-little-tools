@@ -2643,6 +2643,23 @@ function updateMoneyUI() {
   el.classList.toggle('negative', rounded < 0);
 }
 
+function applyMoney(delta) {
+  if (!LEVEL.atrain || !p2State || p2State.unlimited) return 0;
+  p2State.money = Math.round((p2State.money + delta) * 10) / 10;
+  updateMoneyUI();
+  return delta;
+}
+
+function spend(amount) {
+  if (!LEVEL.atrain || !p2State) return true;
+  if (!p2State.unlimited && (p2State.money < 0 || p2State.money < amount)) {
+    showToast('資金不足');
+    return false;
+  }
+  applyMoney(-amount);
+  return true;
+}
+
 function population() {
   let count = 0;
   for (const item of editables.values()) {
@@ -3795,6 +3812,7 @@ function undo() {
   if (last.zebras) setZebras(last.zebras);
   const moved = last.map(([item]) => [item, footprintOf(item)]);
   for (const [item, state] of last) applyState(item, state);
+  if (last.money) applyMoney(-last.money);
   saveLayout();
   settleTown();
   for (const [item, before] of moved) reseatCats(before, footprintOf(item));
@@ -4392,7 +4410,53 @@ function endStroke() {
   const sameTiles = before.tiles.size === tiles.size && [...before.tiles].every(([k, v]) => tiles.get(k) === v);
   const sameZebras = before.zebras === JSON.stringify(zebras);
   if (sameTiles && sameZebras) return;
-  undos.push(Object.assign([], { tiles: before.tiles, zebras: JSON.parse(before.zebras) }));
+
+  const beforeZebras = JSON.parse(before.zebras);
+  if (!LEVEL.atrain || !p2State) {
+    undos.push(Object.assign([], { tiles: before.tiles, zebras: beforeZebras }));
+    saveLayout();
+    settleTown();
+    return;
+  }
+
+  let net = 0;
+  const allTileKeys = new Set([...before.tiles.keys(), ...tiles.keys()]);
+  for (const k of allTileKeys) {
+    const prev = before.tiles.get(k);
+    const next = tiles.get(k);
+    if (prev !== next) {
+      if (prev === 'road') net += 1;
+      else if (prev === 'walk') net += 0.5;
+      if (next === 'road') net -= 2;
+      else if (next === 'walk') net -= 1;
+    }
+  }
+
+  const zbKey = zb => JSON.stringify(zb);
+  const beforeZSet = new Set(beforeZebras.map(zbKey));
+  const afterZSet = new Set(zebras.map(zbKey));
+  for (const zStr of afterZSet) {
+    if (!beforeZSet.has(zStr)) net -= 1;
+  }
+  for (const zStr of beforeZSet) {
+    if (!afterZSet.has(zStr)) net += 0.5;
+  }
+  net = Math.round(net * 10) / 10;
+
+  let delta = 0;
+  if (net < 0) {
+    if (!spend(-net)) {
+      setTiles(Object.fromEntries(before.tiles));
+      setZebras(beforeZebras);
+      settleTown();
+      return;
+    }
+    delta = p2State.unlimited ? 0 : net;
+  } else if (net > 0) {
+    delta = applyMoney(net);
+  }
+
+  undos.push(Object.assign([], { tiles: before.tiles, zebras: beforeZebras, money: delta }));
   saveLayout();
   settleTown();
 }
@@ -4708,7 +4772,15 @@ function setupOpsPanel() {
   const opsBtn = $('ops');
   const opsPanel = $('ops-panel');
   const opsClose = $('ops-close');
+  const unlimitedBox = $('ops-unlimited');
   if (!opsBtn || !opsPanel) return;
+
+  unlimitedBox.checked = p2State.unlimited;
+  unlimitedBox.addEventListener('change', () => {
+    p2State.unlimited = unlimitedBox.checked;
+    saveLayout();
+    updateMoneyUI();
+  });
 
   opsBtn.hidden = false;
 
@@ -4729,6 +4801,7 @@ function setupOpsPanel() {
   opsClose.addEventListener('click', () => toggleOps(false));
 
   function renderOpsPanel() {
+    unlimitedBox.checked = p2State.unlimited;
     renderFleetList();
     renderBuyButtons();
     renderTimetable();
@@ -4783,6 +4856,7 @@ function setupOpsPanel() {
           return;
         }
         if (!confirm(`確定要出售「${train.name}」？已排班次將一併清除。`)) return;
+        applyMoney(TRAIN_TYPES[train.type].price / 2);
         p2State.fleet = p2State.fleet.filter(t => t.id !== train.id);
         p2State.timetable = p2State.timetable.filter(t => t.train !== train.id);
         if (rail) {
@@ -4867,6 +4941,7 @@ function setupOpsPanel() {
       btn.textContent = `+ ${tdef.name}`;
       btn.title = `購買 ${tdef.name}（速度 ${tdef.speed}×，載客 ${tdef.seats} 人）`;
       btn.addEventListener('click', async () => {
+        if (!spend(tdef.price)) return;
         const count = p2State.fleet.filter(t => t.type === typeKey).length + 1;
         const newTrain = {
           id: 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),

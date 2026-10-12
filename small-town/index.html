@@ -295,6 +295,9 @@
 </div>
 <div id="ops-panel" class="add-panel ops-panel" hidden>
   <div class="slots-head"><b>🚆 經營管理</b><button id="ops-close" class="toggle" title="關閉">✕</button></div>
+  <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0;cursor:pointer;">
+    <input type="checkbox" id="ops-unlimited"> 無限資金
+  </label>
   <div class="chips" id="ops-tabs">
     <button class="on" data-tab="train">火車</button>
     <button disabled title="P2-C 開放">公車</button>
@@ -303,7 +306,7 @@
   <div id="ops-train-tab">
     <div class="opt-label" style="font-weight:700;margin-top:10px;">車隊清單</div>
     <div id="ops-fleet-list"></div>
-    <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車（免費試營運）</div>
+    <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車</div>
     <div class="chips" id="ops-buy-buttons"></div>
     <div class="opt-label" style="font-weight:700;margin-top:14px;">運行班表（24 小時整點）</div>
     <div id="ops-timetable" class="ops-timetable-wrap"></div>
