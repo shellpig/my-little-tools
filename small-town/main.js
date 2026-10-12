@@ -704,13 +704,17 @@ function buildStation(commercial) {
     const pivotBounds = new THREE.Box3();
     for (const part of [obj, ...c.parts.filter(part => part !== southPlatform)]) pivotBounds.expandByObject(part);
     pivotBounds.max.z = Math.max(pivotBounds.max.z, 6.0);
-    editable('station', [obj, ...c.parts], {
+    const item = editable('station', [obj, ...c.parts], {
       ...c,
       pivotBounds,
       solids: [obj.userData.solid, ...c.solids],
       places: [PLACES.get(STATION.name)],
       points: [STATION_DOOR],
     });
+    if (LEVEL.atrain) {
+      const b = new THREE.Box3().setFromObject(item.pivot);
+      stationVoice = { obj: item.pivot, bubbleY: b.max.y - b.min.y + 0.1 };
+    }
   });
 }
 
@@ -3190,6 +3194,7 @@ let pointerOnGround = null;
 
 // The fountain speaks for the coin: a plain wish, or the blessing it brought.
 const fountainVoice = { obj: { position: new THREE.Vector3(0, 0.1, PARK ? PARK.cz : 0), visible: true }, bubbleY: 0.6 };
+let stationVoice = null;
 
 function wishResult({ line, blessing }) {
   catBook.coins++;
@@ -3256,6 +3261,13 @@ function talk(speaker, { name, role, line }) {
   talkUntil = performance.now() + 5000;
 }
 
+function talkStation() {
+  const line = p2State.ledger.length
+    ? `昨日乘客 ${p2State.ledger[p2State.ledger.length - 1].riders} 人`
+    : '昨日乘客 —（還沒有結算）';
+  talk(stationVoice, { name: STATION.name, role: '車站', line });
+}
+
 function aim(e) {
   pointer.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
@@ -3264,6 +3276,12 @@ function aim(e) {
 renderer.domElement.addEventListener('pointermove', e => {
   aim(e);
   pointerOnGround = raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
+  // Hovering the station keeps its bubble up until the pointer has been off it a moment.
+  if (stationVoice && !editing && !player.active && raycaster.intersectObject(stationVoice.obj, true)[0]) {
+    const keep = talking === stationVoice ? talkUntil : 0;
+    if (!keep) talkStation();
+    talkUntil = Math.max(keep, performance.now() + 800);
+  }
 });
 renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', e => {
@@ -3275,7 +3293,12 @@ renderer.domElement.addEventListener('pointerup', e => {
     ...(fountain.hit ? [fountain.hit] : []),
   ];
   const hit = raycaster.intersectObjects(targets, false)[0];
-  if (!hit) return;
+  if (!hit) {
+    if (stationVoice && raycaster.intersectObject(stationVoice.obj, true)[0]) {
+      talkStation();
+    }
+    return;
+  }
   const data = hit.object.userData;
   if (data.onClick) return data.onClick();
   if (data.fountain) {
