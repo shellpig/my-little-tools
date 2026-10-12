@@ -721,6 +721,7 @@ export async function buildRail(ctx) {
                 // Backhaul off-map
                 trainObj.at = reqSource;
                 backhauls.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'backhaul' });
+                if (ctx.onTrainRun) ctx.onTrainRun('backhaul', trainObj.type);
               } else {
                 dayRan.set(tripKey, 'cancel');
                 cancels.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'cancel', reason: 'not_idle_enough' });
@@ -733,9 +734,11 @@ export async function buildRail(ctx) {
               lane.waitingQueue.push({ trainObj, trip: t, day: targetDay });
               trainObj.run = t;
               dayRan.set(tripKey, 'waiting');
+              if (ctx.onTrainRun) ctx.onTrainRun(t.stop ? 'stop' : 'pass', trainObj.type);
             } else {
               launchAtrain(lane, trainObj, t);
               dayRan.set(tripKey, 'run');
+              if (ctx.onTrainRun) ctx.onTrainRun(t.stop ? 'stop' : 'pass', trainObj.type);
             }
           }
         }

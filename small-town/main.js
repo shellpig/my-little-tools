@@ -15,7 +15,7 @@ import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
-  normalizeP2, validateTimetable, canAssignTrain
+  normalizeP2, validateTimetable, canAssignTrain, POP, settle
 } from './atrain.js';
 
 // Kenney models are built on a 1-unit grid: one road tile is 1 × 1.
@@ -131,6 +131,19 @@ let opsDay = 0;
 let nextSettlementMinute = 1800;
 let skipModeActive = false;
 let updateFleetLiveStatus = null;
+const dailyCounts = { stops: [], passes: 0, runs: 0, backhauls: 0 };
+
+function recordTrainRun(kind, typeKey) {
+  if (kind === 'stop') {
+    dailyCounts.stops.push(typeKey);
+    dailyCounts.runs++;
+  } else if (kind === 'pass') {
+    dailyCounts.passes++;
+    dailyCounts.runs++;
+  } else if (kind === 'backhaul') {
+    dailyCounts.backhauls++;
+  }
+}
 
 const initTime = +(new URLSearchParams(location.search).get('t') ?? 6);
 if (LEVEL.atrain) {
@@ -920,6 +933,7 @@ async function initRail() {
     LEVEL, CELL, scene, tiles, roads, posts,
     model, place, post, dirOf, headlight,
     onStationStop: burstCommuters,
+    onTrainRun: recordTrainRun,
     fleet: p2State ? p2State.fleet : undefined,
     timetable: p2State ? p2State.timetable : undefined,
     clockMinutes,
@@ -2602,6 +2616,49 @@ function updateUI() {
   if (!dragging) slider.value = time;
 }
 
+let toastTimer = 0;
+function showToast(text) {
+  const el = $('toast');
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2000);
+}
+
+function updateMoneyUI() {
+  const el = $('money');
+  if (!el || !LEVEL.atrain || !p2State) return;
+  if (p2State.unlimited) {
+    el.textContent = '資金 無限';
+    el.classList.remove('negative');
+    return;
+  }
+  const rounded = Math.round(p2State.money * 10) / 10;
+  const formatted = rounded.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  });
+  el.textContent = `資金 ${formatted} 萬`;
+  el.classList.toggle('negative', rounded < 0);
+}
+
+function population() {
+  let count = 0;
+  for (const item of editables.values()) {
+    if (item === placing || item.removed) continue;
+    if (item.add) {
+      if (item.add.type === 'house') count += POP.house;
+      else if (item.add.type === 'villa') count += POP.villa;
+    } else if (item.id.startsWith('home:')) {
+      const idx = Number(item.id.slice(5));
+      const home = HOMES[idx];
+      count += home?.villa ? POP.villa : POP.house;
+    }
+  }
+  return count;
+}
+
 function advanceClock(deltaMinutes) {
   const prevCalDay = Math.floor(clockMinutes / 1440);
   clockMinutes += deltaMinutes;
@@ -2615,6 +2672,26 @@ function advanceClock(deltaMinutes) {
     if (p2State) p2State.day = opsDay;
     nextSettlementMinute += 1440;
     if (rail) rail.onSettlement(opsDay);
+    if (p2State) {
+      const entry = settle(p2State, dailyCounts, population());
+      if (!p2State.unlimited) {
+        p2State.money = entry.balance;
+      }
+      p2State.ledger.push(entry);
+      if (p2State.ledger.length > 7) {
+        p2State.ledger.splice(0, p2State.ledger.length - 7);
+      }
+      dailyCounts.stops = [];
+      dailyCounts.passes = 0;
+      dailyCounts.runs = 0;
+      dailyCounts.backhauls = 0;
+      saveLayout();
+      updateMoneyUI();
+      const net = (entry.income.rail + entry.income.bus + entry.income.facility) - entry.cost;
+      const roundedNet = Math.round(Math.abs(net) * 10) / 10;
+      const netStr = Number.isInteger(roundedNet) ? String(roundedNet) : roundedNet.toFixed(1);
+      showToast(net >= 0 ? `昨日 +${netStr} 萬` : `昨日 −${netStr} 萬`);
+    }
   }
 }
 
@@ -4621,6 +4698,12 @@ addWishes();
 
 function setupOpsPanel() {
   if (!LEVEL.atrain || !p2State) return;
+
+  updateMoneyUI();
+  $('toast')?.addEventListener('click', () => {
+    clearTimeout(toastTimer);
+    $('toast').hidden = true;
+  });
 
   const opsBtn = $('ops');
   const opsPanel = $('ops-panel');

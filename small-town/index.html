@@ -19,6 +19,16 @@
   .title h1 { margin: 0; font-size: 40px; font-weight: 900; letter-spacing: 2px; color: #fff;
     text-shadow: 0 2px 18px rgba(0, 0, 0, .45); }
   .title p { margin: 6px 0 0; font-size: 14px; color: #c9d1e0; text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
+  .title h1 { display: inline-block; }
+  .money { display: none; margin-left: 14px; font-size: 16px; font-weight: 700; color: var(--accent);
+    text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
+  .money.negative { color: #ff6b6b; }
+  body.has-ops .money { display: inline-block; }
+  .toast { position: fixed; right: 276px; top: 20px; z-index: 10; padding: 10px 16px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    backdrop-filter: blur(12px); color: var(--text); font-size: 14px; font-weight: 700;
+    cursor: pointer; box-shadow: 0 4px 20px rgba(0, 0, 0, .35); }
+  .toast[hidden] { display: none; }
   .panel { position: fixed; right: 20px; bottom: 20px; width: 300px; padding: 16px 18px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(12px); }
   .clock { display: flex; align-items: baseline; gap: 10px; }
@@ -206,6 +216,7 @@
     .title { left: 16px; top: 14px; }
     .title h1 { font-size: 30px; }
     .cats { top: auto; bottom: 96px; right: 12px; width: 200px; }
+    .toast { right: 12px; top: 14px; }
     .play { left: 16px; top: 100px; }
     .dress { top: 144px; }
     .edit { top: 188px; }
@@ -236,6 +247,7 @@
 <body>
 <div class="title">
   <h1>小鎮</h1>
+  <div id="money" class="money">資金 5,000 萬</div>
   <p>點路上的人聽他說話，找出躲起來的貓，點噴水池許願。左鍵拖曳平移，右鍵拖曳旋轉，滾輪縮放。</p>
 </div>
 
@@ -380,6 +392,7 @@
   </div>
 </div>
 
+<div id="toast" class="toast" hidden></div>
 <div id="banner" class="banner"></div>
 
 <div id="bubble" class="bubble" hidden><b></b><span></span><p></p></div>

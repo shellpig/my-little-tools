@@ -113,8 +113,11 @@ export function createDefaultP2() {
   return {
     v: 1,
     day: 0,
+    money: 5000,
+    unlimited: false,
     fleet: DEFAULT_FLEET.map(t => ({ ...t })),
     timetable: DEFAULT_TIMETABLE.map(t => ({ ...t })),
+    ledger: [],
   };
 }
 
@@ -125,6 +128,8 @@ export function normalizeP2(rawP2) {
   const out = { ...rawP2 };
   if (out.v === undefined) out.v = 1;
   if (typeof out.day !== 'number' || isNaN(out.day)) out.day = 0;
+  if (typeof out.money !== 'number' || isNaN(out.money)) out.money = 5000;
+  if (typeof out.unlimited !== 'boolean') out.unlimited = false;
   if (!Array.isArray(out.fleet)) {
     out.fleet = DEFAULT_FLEET.map(t => ({ ...t }));
   } else {
@@ -135,7 +140,31 @@ export function normalizeP2(rawP2) {
   } else {
     out.timetable = out.timetable.filter(t => t && typeof t === 'object');
   }
+  if (!Array.isArray(out.ledger)) {
+    out.ledger = [];
+  } else {
+    out.ledger = out.ledger.filter(l => l && typeof l === 'object');
+  }
   return out;
+}
+
+// ---------- daily settlement (P2-B) ----------
+
+export const POP = { house: 4, villa: 3 };
+
+// One day's ledger entry; the caller applies `balance` unless unlimited.
+// Riders per stop are capped by seats, which keeps fare = riders / 4.
+export function settle(state, counts, pop) {
+  let rail = counts.passes * 15;
+  let riders = 0;
+  for (const type of counts.stops) {
+    const { seats, tourism = 1 } = TRAIN_TYPES[type];
+    rail += Math.min(pop / 10, seats / 4) * tourism;
+    riders += Math.min(Math.round(pop * 0.4), seats);
+  }
+  const cost = 8 * (counts.runs + counts.backhauls);
+  const balance = state.unlimited ? state.money : state.money + rail - cost;
+  return { day: state.day, income: { rail, bus: 0, facility: 0 }, cost, riders, balance };
 }
 
 // Validates the sequence of trips for a single train in a 24-hour circular timetable.
