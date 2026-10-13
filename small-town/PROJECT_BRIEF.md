@@ -6,7 +6,7 @@
 
 ## 專案定位與目前能力
 
-Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素材全部是 Kenney CC0。執行：`start.bat`（python http.server，`http://localhost:8766/`）。部署：Cloudflare Pages，Build output directory = `small-town`。
+Three.js 做的迷你小鎮網頁（純靜態，無建置、無後端），素材全部是 Kenney CC0。執行：`start.bat`（python http.server，`http://localhost:8766/`）。部署：Cloudflare Pages 專案 `small-town`（Build output directory = `small-town`，push main 自動部署），正式網址 https://small-town.wetwareassembly.com/ ；官網 `wetwareassembly.com/small-town` 以 `_redirects` 301 導過來（設定在官網 repo）。
 
 已交付：
 
