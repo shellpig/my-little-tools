@@ -2798,8 +2798,8 @@ function formatMan(n) {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-function applyMoney(delta) {
-  if (!LEVEL.atrain || !p2State || p2State.unlimited) return 0;
+function applyMoney(delta, isUndo = false) {
+  if (!LEVEL.atrain || !p2State || (p2State.unlimited && !isUndo)) return 0;
   p2State.money = Math.round((p2State.money + delta) * 10) / 10;
   updateMoneyUI();
   return delta;
@@ -4108,7 +4108,7 @@ function undo() {
   if (last.zebras) setZebras(last.zebras);
   const moved = last.map(([item]) => [item, footprintOf(item)]);
   for (const [item, state] of last) applyState(item, state);
-  if (last.money) applyMoney(-last.money);
+  if (last.money) applyMoney(-last.money, true);
   saveLayout();
   settleTown();
   for (const [item, before] of moved) reseatCats(before, footprintOf(item));
@@ -4332,7 +4332,7 @@ async function buildAdded(id, add) {
   let item;
   if (add.type === 'facility') {
     const fac = FACILITIES[add.kind];
-    let parts, solids = [], isCommercialEarn = false, mat;
+    let parts, itemSolids = [], isCommercialEarn = false, mat;
     if (fac.compose === 'park') {
       parts = [
         await place('nature', 'path_stoneCircle', { scale: 1.3 }),
@@ -4366,9 +4366,16 @@ async function buildAdded(id, add) {
       }
       const obj = solidOf(await place(fac.pack, add.model, { scale: fac.scale, mat }));
       parts = [obj];
-      solids = [obj.userData.solid];
+      itemSolids = [obj.userData.solid];
     }
-    item = editable(id, parts, { solids, places: [frontDoor(parts)] });
+    if (fac.compose) {
+      const bounds = new THREE.Box3();
+      for (const part of parts) bounds.expandByObject(part);
+      const footprint = { minX: bounds.min.x + 0.02, maxX: bounds.max.x - 0.02, minZ: bounds.min.z + 0.02, maxZ: bounds.max.z - 0.02 };
+      solids.push(footprint);
+      itemSolids = [footprint];
+    }
+    item = editable(id, parts, { solids: itemSolids, places: [frontDoor(parts)] });
     if (isCommercialEarn) paintable(item, mat, false);
   } else if (add.type === 'tree') {
     const c = collect(() => post(0, 0, 0.1));
@@ -5166,11 +5173,11 @@ function onStreet(b, rects) {
 }
 
 // Nothing in the way but the level's trees, and at least a cell inside the map.
-function lotFree(box, rects, trees) {
+function lotFree(box, rects, trees, ignoreSolids = null) {
   const b = { minX: box.minX + 0.02, maxX: box.maxX - 0.02, minZ: box.minZ + 0.02, maxZ: box.maxZ - 0.02 };
   const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
   if (b.minX < (iMin + 0.5) * CELL || b.maxX > (iMax - 0.5) * CELL || b.minZ < (jMin + 0.5) * CELL || b.maxZ > (jMax - 0.5) * CELL) return false;
-  if (onStreet(b, rects) || solids.some(s => overlaps(b, s))) return false;
+  if (onStreet(b, rects) || solids.some(s => !ignoreSolids?.has(s) && overlaps(b, s))) return false;
   return !posts.some(p => !trees.has(p) && overlaps(b, postBox(p)));
 }
 
@@ -5247,13 +5254,12 @@ function drawLot(pool) {
 
 // Puts an added building on a lot, front on the lot's front edge, facing the road.
 // Puts an added building on a lot, front on the lot's front edge, facing the
-// road; null if it would touch the street or another building (`replacing`
-// is one that is about to go).
-async function buildOnLot(id, lot, add, rects, replacing = null) {
+// road; null if it would touch the street or another building.
+async function buildOnLot(id, lot, add, rects) {
   const item = await buildAdded(id, add);
   const depth = item.places[0].at.z - 0.05; // pivot to front face
   applyState(item, { x: lot.fx + lot.nx * depth, z: lot.fz + lot.nz * depth, rot: Math.atan2(-lot.nx, -lot.nz), removed: false });
-  const own = new Set([...item.solids, ...(replacing?.solids ?? [])].map(({ s }) => s));
+  const own = new Set(item.solids.map(({ s }) => s));
   if (item.solids.some(({ s }) => onStreet(s, rects) || solids.some(o => !own.has(o) && overlaps(s, o)))) {
     discard(item);
     return null;
@@ -5272,9 +5278,15 @@ async function upgradeHouse(ctx, rects) {
   if (!houses.length) return false;
   const house = randomOf(houses);
   const { lot, born } = house.add;
-  const apt = await buildOnLot(`${house.id}-up`, lotAt(...lot.split(',').map(Number)),
-    { type: 'facility', kind: 'smallApartment', model: 'building-m', auto: true, lot, born }, rects, house);
-  if (!apt) return false;
+  const apt = await buildAdded(`${house.id}-up`,
+    { type: 'facility', kind: 'smallApartment', model: 'building-m', auto: true, lot, born });
+  const state = stateOf(house);
+  applyState(apt, { x: state.x, z: state.z, rot: state.rot, removed: false });
+  const ignored = new Set([...house.solids, ...apt.solids].map(({ s }) => s));
+  if (!lotFree(apt.solids[0].s, rects, new Set(), ignored)) {
+    discard(apt);
+    return false;
+  }
   applyState(house, { ...stateOf(house), removed: true });
   return true;
 }
@@ -6216,6 +6228,10 @@ function setupOpsPanel() {
   let modalSelectedTrain = null;
   let modalStop = true;
 
+  function timetableWithoutModalCell() {
+    return p2State.timetable.filter(t => !(t.hour === modalHour && t.dir === modalDir));
+  }
+
   function openCellModal(hour, dir) {
     modalHour = hour;
     modalDir = dir;
@@ -6259,12 +6275,13 @@ function setupOpsPanel() {
       return;
     }
 
+    const timetable = timetableWithoutModalCell();
     for (const train of p2State.fleet) {
       const btn = document.createElement('button');
       btn.style.textAlign = 'left';
       btn.style.padding = '8px 12px';
 
-      const check = canAssignTrain(p2State.fleet, p2State.timetable, modalHour, modalDir, train.id, modalStop);
+      const check = canAssignTrain(p2State.fleet, timetable, modalHour, modalDir, train.id, modalStop);
       const isCurrentSelected = modalSelectedTrain === train.id;
 
       if (isCurrentSelected) btn.classList.add('on');
@@ -6310,12 +6327,12 @@ function setupOpsPanel() {
       $('ops-cell-modal').hidden = true;
       return;
     }
-    const check = canAssignTrain(p2State.fleet, p2State.timetable, modalHour, modalDir, modalSelectedTrain, modalStop);
+    const remaining = timetableWithoutModalCell();
+    const check = canAssignTrain(p2State.fleet, remaining, modalHour, modalDir, modalSelectedTrain, modalStop);
     if (!check.valid) {
       alert(`無法指派此列車：${check.reason}`);
       return;
     }
-    const remaining = p2State.timetable.filter(t => !(t.hour === modalHour && t.dir === modalDir));
     remaining.push({
       train: modalSelectedTrain,
       dir: modalDir,
