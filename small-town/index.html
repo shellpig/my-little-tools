@@ -37,6 +37,7 @@
   .toast[hidden] { display: none; }
   .panel { position: fixed; right: 20px; bottom: 20px; width: 300px; padding: 16px 18px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(12px); }
+  .game-date { margin-bottom: 6px; font-size: 13px; line-height: 1.4; color: var(--text); }
   .clock { display: flex; align-items: baseline; gap: 10px; }
   .clock b { font: 600 34px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
   .clock span { font-size: 13px; color: var(--dim); }
@@ -326,6 +327,7 @@
 </div>
 
 <div class="panel">
+  <div id="game-date" class="game-date"></div>
   <div class="clock">
     <b id="clock">06:00</b><span id="period">早上</span><span id="weather-status" class="weather-status">晴天</span>
     <button id="toggle" class="toggle" aria-expanded="true" aria-controls="controls" title="收合（H）">▾</button>

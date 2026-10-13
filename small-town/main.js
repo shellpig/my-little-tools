@@ -138,6 +138,12 @@ const sortedTiles = obj => Object.keys(obj).sort().map(k => [k, obj[k]]);
 
 const game = readGame();
 const LEVEL = levelById(game.level);
+const openedAt = new Date();
+const gameDate = game.layout['#date'] ?? [openedAt.getFullYear(), openedAt.getMonth() + 1, openedAt.getDate()];
+if (!game.layout['#date']) {
+  game.layout['#date'] = gameDate;
+  try { localStorage.setItem(GAME_KEY, JSON.stringify(game)); } catch { /* storage unavailable */ }
+}
 
 let p2State = null;
 let calDay = 0;
@@ -2845,6 +2851,7 @@ addEventListener('keydown', e => {
 
 const PERIODS = [[5, '凌晨'], [11, '早上'], [13, '中午'], [17, '下午'], [19, '傍晚'], [24, '夜晚']];
 function updateUI() {
+  $('game-date').textContent = `${gameDate[0]}年${gameDate[1]}月${gameDate[2]}日`;
   const minutes = Math.floor(time * 60);
   $('clock').textContent = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   $('period').textContent = PERIODS.find(([h]) => time < h)[1];
@@ -4152,7 +4159,7 @@ function reseatCats(before, after) {
 
 // Only what differs from the default town, versioned for migration.
 function currentLayout() {
-  const layout = { '#v': 2 };
+  const layout = { '#v': 2, '#date': gameDate };
   if (weather) layout['#weather'] = weather.snapshot();
   const current = Object.fromEntries(tiles);
   if (JSON.stringify(sortedTiles(current)) !== JSON.stringify(sortedTiles(defaultTilesObj(LEVEL)))) layout['#tiles'] = current;
