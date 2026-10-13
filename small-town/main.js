@@ -2762,6 +2762,28 @@ function setCollapsed(collapsed) {
 try { setCollapsed(localStorage.getItem('small-town:collapsed') === '1'); } catch { /* storage unavailable */ }
 toggle.addEventListener('click', () => { setCollapsed(!panel.classList.contains('collapsed')); toggle.blur(); });
 
+const collectionsPanel = document.querySelector('.cats');
+const collectionsToggle = $('collections-toggle');
+function setCollectionsCollapsed(collapsed) {
+  collectionsPanel.classList.toggle('collapsed', collapsed);
+  $('collections-content').hidden = collapsed;
+  collectionsToggle.setAttribute('aria-expanded', String(!collapsed));
+  const label = collapsed ? '展開收集面板' : '收合收集面板';
+  collectionsToggle.title = label;
+  collectionsToggle.setAttribute('aria-label', label);
+  collectionsToggle.textContent = collapsed ? '▴' : '▾';
+  try { localStorage.setItem('small-town:collections-collapsed', collapsed ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+try { setCollectionsCollapsed(localStorage.getItem('small-town:collections-collapsed') === '1'); } catch { /* storage unavailable */ }
+collectionsToggle.addEventListener('click', () => setCollectionsCollapsed(!collectionsPanel.classList.contains('collapsed')));
+collectionsToggle.addEventListener('keydown', e => {
+  if (e.code === 'Enter' || e.code === 'Space') e.stopPropagation();
+});
+// Keep the collection controls above the clock on small screens, even when H folds it.
+const placeCollections = () => collectionsPanel.style.setProperty('--clock-panel-height', `${panel.getBoundingClientRect().height}px`);
+new ResizeObserver(placeCollections).observe(panel);
+placeCollections();
+
 const leftMenu = $('left-menu');
 const leftMenuToggle = $('left-menu-toggle');
 function setLeftMenuCollapsed(collapsed) {
@@ -3200,6 +3222,10 @@ function drawCatBook(fresh) {
     return chip;
   }));
   $('wish-count').textContent = `${catBook.blessings.length}/${BLESSINGS.length}`;
+  $('collections-summary').textContent = [
+    ...(showCats ? [`貓咪 ${$('cat-count').textContent}`] : []),
+    ...(showWishes ? [`祝福 ${$('wish-count').textContent}`] : []),
+  ].join(' · ');
   $('wish-row').replaceChildren(...BLESSINGS.map(b => {
     const chip = document.createElement('span');
     const seen = catBook.blessings.includes(b.id);

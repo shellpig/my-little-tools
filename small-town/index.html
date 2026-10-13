@@ -67,6 +67,13 @@
   .bubble p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; }
   .cats { position: fixed; right: 20px; top: 20px; width: 236px; padding: 12px 14px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(12px); }
+  .cats-header { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+  .cats-summary { display: none; white-space: nowrap; font-size: 13px; color: var(--accent); }
+  .cats-content { margin-top: 10px; max-height: calc(100dvh - 110px); overflow-y: auto; }
+  .cats.collapsed { width: auto; }
+  .cats.collapsed .cats-caption { display: none; }
+  .cats.collapsed .cats-summary { display: inline; }
+  #collections-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .cats-head { display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; }
   .cats-head b { color: var(--accent); }
   .cats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0 8px; }
@@ -281,7 +288,9 @@
     .panel.collapsed { left: auto; }
     .title { left: 16px; top: 14px; }
     .title h1 { font-size: 30px; }
-    .cats { top: auto; bottom: 96px; right: 12px; width: 200px; }
+    .cats { top: auto; bottom: max(96px, calc(var(--clock-panel-height, 315px) + 24px)); right: 12px; width: 200px; }
+    .cats.collapsed { width: auto; }
+    .cats-content { max-height: max(0px, calc(100dvh - var(--clock-panel-height, 315px) - 180px)); }
     .toast { right: 12px; top: 14px; }
     .left-menu { left: 16px; top: 100px; }
     .left-menu-items { max-height: calc(100vh - 148px); }
@@ -352,11 +361,17 @@
 </div>
 
 <div class="cats">
-  <div class="cats-head">貓咪 <b id="cat-count">0/8</b></div>
-  <div class="cats-row" id="cat-row"></div>
-  <div class="cats-head">祝福 <b id="wish-count">0/10</b></div>
-  <div class="cats-row wishes" id="wish-row"></div>
-  <div class="cats-total" id="cat-total"></div>
+  <div class="cats-header">
+    <b class="cats-caption">收集紀錄</b><span id="collections-summary" class="cats-summary"></span>
+    <button id="collections-toggle" class="toggle" type="button" aria-expanded="true" aria-controls="collections-content" aria-label="收合收集面板" title="收合收集面板">▾</button>
+  </div>
+  <div id="collections-content" class="cats-content">
+    <div class="cats-head">貓咪 <b id="cat-count">0/8</b></div>
+    <div class="cats-row" id="cat-row"></div>
+    <div class="cats-head">祝福 <b id="wish-count">0/10</b></div>
+    <div class="cats-row wishes" id="wish-row"></div>
+    <div class="cats-total" id="cat-total"></div>
+  </div>
 </div>
 
 <nav id="left-menu" class="left-menu" aria-label="主要選單">
