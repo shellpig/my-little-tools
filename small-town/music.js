@@ -11,13 +11,16 @@ export function createMusicPlayer() {
   const files = $('music-files');
   const list = $('music-list');
   const status = $('music-status');
-  const bgm = { name: '小鎮午後 · Lo-fi', url: 'assets/music/afternoon-lofi.mp3' };
+  const bgmTracks = [
+    { name: 'Sunny Station', url: 'assets/music/01-sunny-station.mp3' },
+    { name: 'Station Breeze', url: 'assets/music/02-station-breeze.mp3' },
+    { name: 'Sunset Station', url: 'assets/music/03-sunset-station.mp3' },
+    { name: 'Moonlit Station', url: 'assets/music/04-moonlit-station.mp3' },
+  ];
   let localTracks = [];
-  let tracks = [bgm];
+  let tracks = bgmTracks;
   let mode = 'bgm';
   let index = 0;
-  let bgmUrl = null;
-  let bgmLoading = null;
   let playRequest = 0;
   let loading = false;
 
@@ -60,20 +63,21 @@ export function createMusicPlayer() {
     loading = true;
     updatePlay();
     try {
-      if (mode === 'bgm' && !bgmUrl) {
+      const track = tracks[index];
+      if (mode === 'bgm' && !track.blobUrl) {
         status.textContent = '載入音樂…';
         // A blob also permits seeking on static servers without range requests.
-        if (!bgmLoading) bgmLoading = fetch(bgm.url).then(response => {
+        if (!track.loading) track.loading = fetch(track.url).then(response => {
           if (!response.ok) throw new Error('BGM unavailable');
           return response.blob();
-        }).then(blob => { bgmUrl = URL.createObjectURL(blob); }).catch(error => {
-          bgmLoading = null;
+        }).then(blob => { track.blobUrl = URL.createObjectURL(blob); }).catch(error => {
+          track.loading = null;
           throw error;
         });
-        await bgmLoading;
+        await track.loading;
       }
       if (request !== playRequest) return;
-      if (mode === 'bgm' && audio.getAttribute('src') !== bgmUrl) audio.src = bgmUrl;
+      if (mode === 'bgm' && audio.getAttribute('src') !== track.blobUrl) audio.src = track.blobUrl;
       status.textContent = '';
       await audio.play();
     } catch (error) {
@@ -112,7 +116,7 @@ export function createMusicPlayer() {
     loading = false;
     audio.pause();
     index = next;
-    audio.src = tracks[index] === bgm && bgmUrl ? bgmUrl : tracks[index].url;
+    audio.src = tracks[index].blobUrl ?? tracks[index].url;
     audio.loop = repeat.checked && tracks.length === 1;
     status.textContent = '';
     updateProgress();
@@ -125,7 +129,7 @@ export function createMusicPlayer() {
     if (mode === next) return;
     const autoplay = !audio.paused || loading;
     mode = next;
-    tracks = mode === 'bgm' ? [bgm] : localTracks;
+    tracks = mode === 'bgm' ? bgmTracks : localTracks;
     selectTrack(0, autoplay);
   }
 
@@ -206,7 +210,7 @@ export function createMusicPlayer() {
   window.addEventListener('pagehide', e => {
     if (!e.persisted) {
       for (const track of localTracks) URL.revokeObjectURL(track.url);
-      if (bgmUrl) URL.revokeObjectURL(bgmUrl);
+      for (const track of bgmTracks) if (track.blobUrl) URL.revokeObjectURL(track.blobUrl);
     }
   });
   selectTrack(0);
