@@ -13,6 +13,7 @@ import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
 import { LEVELS, levelById } from './levels/index.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
+import { createMusicPlayer } from './music.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
   BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY, FACILITIES,
@@ -6346,5 +6347,6 @@ function setupOpsPanel() {
 
 await addWardrobe();
 setupOpsPanel();
+createMusicPlayer();
 $('loading').classList.add('done');
 frame();
