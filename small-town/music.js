@@ -30,24 +30,25 @@ export function createMusicPlayer() {
   let loading = false;
   let blockedAutoplay = false;
   let lastHours = null;
+  let baseVolume = 0.35;
+  const FADE = 3;
 
-  audio.volume = 0.35;
   try {
     const saved = JSON.parse(localStorage.getItem('small-town:music'));
-    if (saved && Number.isFinite(saved.volume)) audio.volume = Math.max(0, Math.min(1, saved.volume));
+    if (saved && Number.isFinite(saved.volume)) baseVolume = Math.max(0, Math.min(1, saved.volume));
     if (saved && (saved.bgmMode === 'clock' || saved.bgmMode === 'loop')) bgmMode = saved.bgmMode;
     if (saved && typeof saved.clockOn === 'boolean') clockOn = saved.clockOn;
     if (saved && Array.isArray(saved.loopOn) && saved.loopOn.length === 4) {
       loopOn = saved.loopOn.map(Boolean);
     }
   } catch { /* storage unavailable */ }
-  volume.value = Math.round(audio.volume * 100);
+  volume.value = Math.round(baseVolume * 100);
   $('music-volume-value').textContent = `${volume.value}%`;
 
   function savePreferences() {
     try {
       localStorage.setItem('small-town:music', JSON.stringify({
-        volume: audio.volume,
+        volume: baseVolume,
         bgmMode,
         clockOn,
         loopOn,
@@ -66,6 +67,25 @@ export function createMusicPlayer() {
     seek.max = ready ? audio.duration : 1;
     seek.value = ready ? audio.currentTime : 0;
     $('music-time').textContent = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
+  }
+
+  // Every track fades in over its first FADE seconds and out over its last.
+  function applyFade() {
+    const t = audio.currentTime;
+    const edge = Number.isFinite(audio.duration) ? Math.min(t, audio.duration - t) : t;
+    audio.volume = baseVolume * Math.max(0, Math.min(1, edge / FADE));
+  }
+
+  // Timed music the browser blocked starts on the first click or key press
+  // outside the music panel (the panel's own ▶ already handles it).
+  function resumeOnGesture(e) {
+    if (e.target instanceof Element && e.target.closest('#music-panel')) return;
+    removeEventListener('pointerdown', resumeOnGesture);
+    removeEventListener('keydown', resumeOnGesture);
+    if (blockedAutoplay && clockOn) {
+      blockedAutoplay = false;
+      start();
+    }
   }
 
   function getPeriodTrackIndex(h) {
@@ -114,7 +134,7 @@ export function createMusicPlayer() {
   function updateStatus() {
     if (mode === 'bgm' && bgmMode === 'clock') {
       if (blockedAutoplay) {
-        status.textContent = '點一下 ▶ 開始時段音樂';
+        status.textContent = '點一下畫面開始時段音樂';
       } else if (audio.paused && !loading && clockOn) {
         const next = getNextCue(lastHours ?? 6);
         status.textContent = `下一首 ${next.cueTime} · ${next.name}`;
@@ -156,7 +176,9 @@ export function createMusicPlayer() {
       if (request === playRequest && error.name !== 'AbortError') {
         if (mode === 'bgm' && bgmMode === 'clock' && error.name === 'NotAllowedError') {
           blockedAutoplay = true;
-          status.textContent = '點一下 ▶ 開始時段音樂';
+          status.textContent = '點一下畫面開始時段音樂';
+          addEventListener('pointerdown', resumeOnGesture);
+          addEventListener('keydown', resumeOnGesture);
         } else {
           status.textContent = error.name === 'NotAllowedError'
             ? '請再按一次播放。' : '無法播放這首音樂，請選擇其他檔案。';
@@ -238,6 +260,7 @@ export function createMusicPlayer() {
     audio.pause();
     index = next;
     audio.src = tracks[index].blobUrl ?? tracks[index].url;
+    audio.volume = 0;
     updateAudioLoop();
     status.textContent = '';
     updateProgress();
@@ -399,7 +422,8 @@ export function createMusicPlayer() {
   });
   seek.addEventListener('input', () => { audio.currentTime = Number(seek.value); });
   volume.addEventListener('input', () => {
-    audio.volume = Number(volume.value) / 100;
+    baseVolume = Number(volume.value) / 100;
+    applyFade();
     $('music-volume-value').textContent = `${volume.value}%`;
     savePreferences();
   });
@@ -443,12 +467,19 @@ export function createMusicPlayer() {
   });
 
   function tick(hours, speed) {
+    if (!audio.paused) applyFade();
     if (lastHours === null) {
       lastHours = hours;
       if (mode === 'bgm' && bgmMode === 'clock') {
-        index = getPeriodTrackIndex(hours);
-        audio.src = tracks[index].blobUrl ?? tracks[index].url;
-        renderList();
+        // A game that opens right on a cue (the 06:00 start) plays that track.
+        const cue = bgmTracks.findIndex(track => Math.abs(hours - track.cueHour) < 1 / 60);
+        if (cue !== -1 && clockOn) {
+          selectTrack(cue, true);
+        } else {
+          index = getPeriodTrackIndex(hours);
+          audio.src = tracks[index].blobUrl ?? tracks[index].url;
+          renderList();
+        }
       }
       updateStatus();
       return;
