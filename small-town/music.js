@@ -315,7 +315,7 @@ export function createMusicPlayer() {
     panel.hidden = true;
     toggle.setAttribute('aria-expanded', 'false');
     toggle.classList.remove('on');
-    toggle.focus();
+    toggle.blur();
   }
 
   toggle.addEventListener('click', () => {

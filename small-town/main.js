@@ -2792,6 +2792,10 @@ placeCollections();
 
 const leftMenu = $('left-menu');
 const leftMenuToggle = $('left-menu-toggle');
+const placeEditPanels = () => document.documentElement.style.setProperty('--edit-panel-top', `${leftMenu.getBoundingClientRect().bottom + 8}px`);
+new ResizeObserver(placeEditPanels).observe(leftMenu);
+addEventListener('resize', placeEditPanels);
+placeEditPanels();
 function setLeftMenuCollapsed(collapsed) {
   leftMenu.classList.toggle('collapsed', collapsed);
   const label = collapsed ? '展開左側選單' : '收合左側選單';
@@ -6469,5 +6473,26 @@ function setupOpsPanel() {
 await addWardrobe();
 setupOpsPanel();
 const music = createMusicPlayer();
+// Capture Escape before panel inputs consume it; close the foremost open menu.
+addEventListener('keydown', e => {
+  if (e.code !== 'Escape') return;
+  const menus = [
+    ['ops-cell-modal', 'ops-modal-close'],
+    ['closet', 'closet-close'],
+    ['levels', 'levels-close'],
+    ['music-panel', 'music-close'],
+    ['ops-panel', 'ops-close'],
+    ['add-panel', 'add-close'],
+    ['paint-panel', 'paint-close'],
+  ];
+  const focused = menus.find(([id]) => !$(id).hidden && $(id).contains(document.activeElement));
+  const menu = !$('ops-cell-modal').hidden ? menus[0] : focused ?? menus.find(([id]) => !$(id).hidden);
+  if (!menu && (!editing || brush || placing)) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (menu) $(menu[1]).click();
+  else setEditing(false);
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+}, true);
 $('loading').classList.add('done');
 frame();

@@ -212,6 +212,7 @@
   .slot button:disabled { opacity: .4; cursor: default; }
   .add-panel { position: fixed; left: 28px; top: 292px; z-index: 6; width: 300px; max-height: calc(100vh - 374px); overflow: auto;
     box-sizing: border-box; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(16, 20, 30, .94); }
+  #add-panel, #paint-panel { top: var(--edit-panel-top, 428px); max-height: calc(100dvh - var(--edit-panel-top, 428px) - 82px); }
   .ops-panel { left: 50%; top: 50%; z-index: 7; transform: translate(-50%, -50%); display: flex; flex-direction: column; overflow: hidden;
     width: min(760px, calc(100vw - 32px)); height: min(720px, calc(100vh - 32px)); max-height: none; }
   .ops-panel[hidden] { display: none; }
@@ -381,10 +382,10 @@
   <div id="left-menu-items" class="left-menu-items">
     <button id="play" class="play" type="button" aria-label="散步模式（P）" title="散步模式（P）"><span class="ico">🚶</span><span class="label">散步模式（P）</span></button>
     <button id="dress" class="play dress" type="button" aria-label="換裝（C）" title="換裝（C）"><span class="ico">👕</span><span class="label">換裝（C）</span></button>
-    <button id="edit" class="play edit" type="button" aria-label="編輯（B）" title="編輯（B）"><span class="ico">🛠</span><span class="label">編輯（B）</span></button>
     <button id="ops" class="play ops" type="button" aria-label="經營" title="經營" hidden><span class="ico">🚆</span><span class="label">經營</span></button>
     <button id="new-town" class="play newtown" type="button" aria-label="關卡與存檔" title="關卡與存檔"><span class="ico">🏘</span><span class="label">關卡與存檔</span></button>
     <button id="music" class="play music" type="button" aria-controls="music-panel" aria-expanded="false" aria-label="音樂" title="音樂"><span class="ico">🎵</span><span class="label">音樂</span></button>
+    <button id="edit" class="play edit" type="button" aria-label="編輯（B）" title="編輯（B）"><span class="ico">🛠</span><span class="label">編輯（B）</span></button>
   </div>
 </nav>
 <div class="edit-bar">
