@@ -4,7 +4,7 @@
 
 - 更新：2026-10-13。
 - 目標：P2 結束後使用者提出的經營面板改善，三項依序做：面板置中、加寬、可拉寬高；購買火車一行一種並附小圖；運行班表可用拖拉設定。只動第 2 關的經營面板，第 1 關不受影響。
-- 分支：`feat/small-town-ops-ui`，從 main `c116efe` 開出；完成後經使用者同意 merge 回 main。
+- 分支：`feat/small-town-ops-ui`，從 main `c116efe` 開出；U1～U3 驗證通過，已 merge 回 main 並 push。
 - 指揮者：Claude Code；實作者：agy / Gemini 3.8 Flash (High)；本機工作樹直接改程式，不得 git 寫入。每步驗證後由指揮者 commit。
 - 契約：本需求沒有 Phase 文件，範圍與規則全部寫在各 step 檔的「指揮者裁定」。
 - prompt 與輸出：`C:\_work\AI_Work\Tools\agy-runs\agy-small-town-UI*.*`。
