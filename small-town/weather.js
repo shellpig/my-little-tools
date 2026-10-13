@@ -55,9 +55,9 @@ const randomInterval = () => 180 + Math.random() * 180;
 
 function randomWeather() {
   const roll = Math.random();
-  if (roll < 0.4) return 'sunny';
-  if (roll < 0.7) return 'cloudy';
-  if (roll < 0.9) return 'rain';
+  if (roll < 0.7) return 'sunny';
+  if (roll < 0.83) return 'cloudy';
+  if (roll < 0.96) return 'rain';
   return 'snow';
 }
 
