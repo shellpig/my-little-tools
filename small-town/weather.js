@@ -8,7 +8,8 @@ const QUALITY = {
   low: { snow: 500, rain: 140 },
 };
 const SNOW_HEIGHT = 24;
-const RAIN_HEIGHT = 28;
+const RAIN_SPEED = 220;
+const RAIN_SLANT = 0.12;
 const TRANSITION_SECONDS = 2;
 const SNOW_MAX = 0.8;
 
@@ -142,25 +143,16 @@ export function createWeather({ scene, camera, focus, sun, hemi, bounds, cellSiz
   }
   const flakes = createSnowfall(scene, snowPositions);
   flakes.geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
-  const rainGeometry = new THREE.BufferGeometry();
-  const rainPositions = new Float32Array(QUALITY.high.rain * 6);
+  // A fine camera-facing rain curtain keeps every streak parallel while panning or zooming.
+  const rainCanvas = document.createElement('canvas');
+  rainCanvas.setAttribute('aria-hidden', 'true');
+  Object.assign(rainCanvas.style, { position: 'fixed', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', display: 'none' });
+  document.querySelector('canvas').after(rainCanvas);
+  const rainContext = rainCanvas.getContext('2d');
+  const rainDrops = new Float32Array(QUALITY.high.rain * 4);
   for (let i = 0; i < QUALITY.high.rain; i++) {
-    const x = Math.random() * 2 - 1;
-    const z = Math.random() * 2 - 1;
-    const y = Math.random() * RAIN_HEIGHT;
-    const dx = (Math.random() - 0.5) * 0.02;
-    const dz = (Math.random() - 0.5) * 0.02;
-    const length = 0.5 + Math.random() * 0.9;
-    rainPositions.set([x, y, z, x + dx, y - length, z + dz], i * 6);
+    rainDrops.set([Math.random(), Math.random(), 5 + Math.random() * 6, 0.85 + Math.random() * 0.3], i * 4);
   }
-  rainGeometry.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
-  rainGeometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
-  rainGeometry.setDrawRange(0, QUALITY.high.rain * 2);
-  const rainMaterial = new THREE.LineBasicMaterial({ color: 0xd7e3ef, transparent: true, opacity: 0.32, depthWrite: false });
-  const rain = new THREE.LineSegments(rainGeometry, rainMaterial);
-  rain.frustumCulled = false;
-  rain.visible = false;
-  scene.add(rain);
 
   let mode = 'auto';
   let manualWeather = 'sunny';
@@ -218,39 +210,51 @@ export function createWeather({ scene, camera, focus, sun, hemi, bounds, cellSiz
     flakes.position.x = focus.x;
     flakes.position.z = focus.z;
     flakes.scale.set(radiusX, SNOW_HEIGHT, radiusZ);
-    rain.position.x = focus.x;
-    rain.position.z = focus.z;
-    rain.scale.set(radiusX, 1, radiusZ);
   }
 
   function setParticleQuality() {
     const counts = QUALITY[quality];
     flakes.geometry.setDrawRange(0, counts.snow);
-    rainGeometry.setDrawRange(0, counts.rain * 2);
+  }
+
+  function updateRain(dt, amount) {
+    const visible = amount > 0.005;
+    rainCanvas.style.display = visible ? 'block' : 'none';
+    if (!visible) return;
+    const width = innerWidth;
+    const height = innerHeight;
+    const ratio = quality === 'high' ? Math.min(devicePixelRatio, 2) : 1;
+    if (rainCanvas.width !== Math.round(width * ratio) || rainCanvas.height !== Math.round(height * ratio)) {
+      rainCanvas.width = Math.round(width * ratio);
+      rainCanvas.height = Math.round(height * ratio);
+    }
+    rainContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+    rainContext.clearRect(0, 0, width, height);
+    rainContext.strokeStyle = `rgba(198, 215, 228, ${0.24 * amount})`;
+    rainContext.lineWidth = 0.7;
+    rainContext.lineCap = 'round';
+    rainContext.beginPath();
+    for (let i = 0; i < QUALITY[quality].rain; i++) {
+      const offset = i * 4;
+      const travel = RAIN_SPEED * rainDrops[offset + 3] * dt;
+      rainDrops[offset] = (rainDrops[offset] + travel * RAIN_SLANT / width) % 1;
+      rainDrops[offset + 1] = (rainDrops[offset + 1] + travel / height) % 1;
+      const x = rainDrops[offset] * width;
+      const y = rainDrops[offset + 1] * height;
+      const length = rainDrops[offset + 2];
+      rainContext.moveTo(x, y);
+      rainContext.lineTo(x + RAIN_SLANT * length, y + length);
+    }
+    rainContext.stroke();
   }
 
   function updateParticles(dt) {
     const rainAmount = currentProfile.rain;
     const flakeAmount = currentProfile.snow;
-    rain.visible = rainAmount > 0.005;
     flakes.visible = flakeAmount > 0.005;
-    rainMaterial.opacity = 0.32 * rainAmount;
     flakes.material.opacity = 0.9 * flakeAmount;
-    if (rain.visible || flakes.visible) updateCoverage();
-    if (rain.visible) {
-      const positions = rainGeometry.attributes.position.array;
-      for (let i = 0; i < QUALITY[quality].rain; i++) {
-        const top = i * 6 + 1;
-        const bottom = top + 3;
-        positions[top] -= 16 * dt;
-        positions[bottom] -= 16 * dt;
-        if (positions[bottom] < 0) {
-          positions[top] += RAIN_HEIGHT;
-          positions[bottom] += RAIN_HEIGHT;
-        }
-      }
-      rainGeometry.attributes.position.needsUpdate = true;
-    }
+    updateRain(dt, rainAmount);
+    if (flakes.visible) updateCoverage();
     if (flakes.visible) {
       const positions = flakes.geometry.attributes.position.array;
       snowTime += dt;
