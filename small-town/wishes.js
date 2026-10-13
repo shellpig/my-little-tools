@@ -35,8 +35,9 @@ function inPart(when, t) {
   return true;
 }
 
-// A soft round dot for point sprites.
-function dotTexture() {
+let snowDotTexture;
+export function getSnowDotTexture() {
+  if (snowDotTexture) return snowDotTexture;
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d');
@@ -46,39 +47,59 @@ function dotTexture() {
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(c);
+  snowDotTexture = new THREE.CanvasTexture(c);
+  return snowDotTexture;
+}
+
+export function createSnowfall(scene, positions) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({ size: 0.07, map: getSnowDotTexture(), color: 0xffffff, transparent: true, depthWrite: false });
+  const flakes = new THREE.Points(geo, mat);
+  flakes.frustumCulled = false;
+  scene.add(flakes);
+  return flakes;
 }
 
 // Snow settles on whatever faces up: every standard material mixes towards
 // white by how much its surface points at the sky, times `snow.value`.
 export const snow = { value: 0 };
-export function patchSnow(scene) {
-  const done = new Set();
-  scene.traverse(o => {
-    for (const mat of [o.material].flat()) {
-      if (!mat?.isMeshStandardMaterial || done.has(mat)) continue;
-      done.add(mat);
-      mat.onBeforeCompile = shader => {
-        shader.uniforms.snowAmount = snow;
-        shader.vertexShader = shader.vertexShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vSnowNormal;')
-          .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSnowNormal = mat3(modelMatrix) * objectNormal;');
-        shader.fragmentShader = shader.fragmentShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vSnowNormal;\nuniform float snowAmount;')
-          .replace('#include <map_fragment>', `#include <map_fragment>
+const snowPatchedMaterials = new WeakSet();
+function patchSnowMaterial(mat) {
+  if (!mat?.isMeshStandardMaterial || snowPatchedMaterials.has(mat)) return;
+  snowPatchedMaterials.add(mat);
+  const onBeforeCompile = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (shader, renderer) {
+    onBeforeCompile?.call(this, shader, renderer);
+    shader.uniforms.snowAmount = snow;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSnowNormal;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSnowNormal = mat3(modelMatrix) * objectNormal;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSnowNormal;\nuniform float snowAmount;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
             float snowUp = smoothstep(0.55, 0.9, normalize(vSnowNormal).y);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.95, 0.98), snowAmount * snowUp);`);
-      };
-      mat.customProgramCacheKey = () => 'snow';
-      mat.needsUpdate = true;
-    }
-  });
+  };
+  mat.customProgramCacheKey = () => 'snow';
+  mat.needsUpdate = true;
+}
+export function patchSnow(root) {
+  if (Array.isArray(root)) root.forEach(patchSnowMaterial);
+  else if (root?.isMaterial) patchSnowMaterial(root);
+  else root?.traverse?.(o => { for (const mat of [o.material].flat()) patchSnowMaterial(mat); });
+}
+
+function snowMaterial(options) {
+  const mat = new THREE.MeshStandardMaterial(options);
+  patchSnow(mat);
+  return mat;
 }
 
 export function createWishes(town) {
-  const { scene, camera, park, fountain, getTime, setCrowdBoost, pointerGround, streets } = town;
+  const { scene, camera, park, fountain, getTime, setCrowdBoost, pointerGround, streets, weather } = town;
   const centre = new THREE.Vector3(0, 0.09, park.cz);
-  const dot = dotTexture();
+  const dot = getSnowDotTexture();
   const effects = []; // { blessing, update(dt) → still running, end() }
   const clickables = new Set();
   const flights = [];
@@ -89,7 +110,7 @@ export function createWishes(town) {
 
   const coinGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.007, 16);
   // Half metal: with nothing to reflect, full metal reads as dark brown.
-  const coinMat = new THREE.MeshStandardMaterial({ color: 0xffcf4d, metalness: 0.35, roughness: 0.35, emissive: 0xb07a00, emissiveIntensity: 0.5 });
+  const coinMat = snowMaterial({ color: 0xffcf4d, metalness: 0.35, roughness: 0.35, emissive: 0xb07a00, emissiveIntensity: 0.5 });
   const rippleGeo = new THREE.RingGeometry(0.03, 0.045, 32).rotateX(-Math.PI / 2);
 
   // ---- coins ----
@@ -173,7 +194,7 @@ export function createWishes(town) {
       ready: () => effects.filter(e => e.blessing.id === 'duck').length < 3,
       start() {
         const duck = new THREE.Group();
-        const m = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 });
+        const m = c => snowMaterial({ color: c, roughness: 0.6 });
         const part = (w, h, d, mat, x, y, z) => {
           const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
           b.position.set(x, y, z);
@@ -210,7 +231,7 @@ export function createWishes(town) {
     lanterns: {
       ...once('lanterns'),
       start() {
-        const glow = new THREE.MeshStandardMaterial({ color: 0xffc070, emissive: 0xff8a2a, emissiveIntensity: 2.2, transparent: true });
+        const glow = snowMaterial({ color: 0xffc070, emissive: 0xff8a2a, emissiveIntensity: 2.2, transparent: true });
         const geo = new THREE.BoxGeometry(0.11, 0.15, 0.11);
         const lanterns = [];
         let t = 0;
@@ -363,18 +384,18 @@ export function createWishes(town) {
         hues.forEach((c, i) => {
           const seg = new THREE.Mesh(
             new THREE.SphereGeometry(0.55, 4, 14, i * Math.PI / 4, Math.PI / 4),
-            new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, side: THREE.DoubleSide }),
+            snowMaterial({ color: c, roughness: 0.6, side: THREE.DoubleSide }),
           );
           seg.scale.y = 1.2;
           seg.castShadow = true;
           balloon.add(seg);
         });
-        const basket = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.13, 0.18), new THREE.MeshStandardMaterial({ color: 0x8a5a3a }));
+        const basket = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.13, 0.18), snowMaterial({ color: 0x8a5a3a }));
         basket.position.y = -0.95;
         basket.castShadow = true;
         balloon.add(basket);
         for (const [x, z] of [[-0.08, -0.08], [0.08, -0.08], [-0.08, 0.08], [0.08, 0.08]]) {
-          const rope = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.36, 0.008), new THREE.MeshStandardMaterial({ color: 0x3b2f2a }));
+          const rope = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.36, 0.008), snowMaterial({ color: 0x3b2f2a }));
           rope.position.set(x * 1.6, -0.72, z * 1.6);
           balloon.add(rope);
         }
@@ -481,9 +502,9 @@ export function createWishes(town) {
       start() {
         const group = new THREE.Group();
         const S = streets.back;
-        const red = new THREE.MeshStandardMaterial({ color: 0xd62828, emissive: 0xff3b1f, emissiveIntensity: 1.8 });
-        const wire = new THREE.MeshStandardMaterial({ color: 0x222222 });
-        const warm = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd49a, emissiveIntensity: 2 });
+        const red = snowMaterial({ color: 0xd62828, emissive: 0xff3b1f, emissiveIntensity: 1.8 });
+        const wire = snowMaterial({ color: 0x222222 });
+        const warm = snowMaterial({ color: 0x222222, emissive: 0xffd49a, emissiveIntensity: 2 });
         // Strings of lanterns across the street.
         for (let x = -4.5; x <= 4.5; x += 1) {
           const span = 2.9;
@@ -504,9 +525,9 @@ export function createWishes(town) {
         awnings.forEach((c, i) => {
           const x = -4 + i * 2;
           const z = S + 1.15;
-          const table = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.2), new THREE.MeshStandardMaterial({ color: 0x8a5a3a }));
+          const table = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.2), snowMaterial({ color: 0x8a5a3a }));
           table.position.set(x, 0.11, z);
-          const roof = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.28), new THREE.MeshStandardMaterial({ color: c }));
+          const roof = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.28), snowMaterial({ color: c }));
           roof.position.set(x, 0.36, z);
           const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.006, 0.12), warm);
           lamp.position.set(x, 0.345, z);
@@ -540,35 +561,14 @@ export function createWishes(town) {
     snow: {
       ...once('snow'),
       start() {
-        const count = 1800;
-        const geo = new THREE.BufferGeometry();
-        const pos = new Float32Array(count * 3);
-        for (let i = 0; i < count; i++) pos.set([rnd(-13, 13), rnd(0, 9), rnd(-14, 10)], i * 3);
-        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        const mat = new THREE.PointsMaterial({ size: 0.07, map: dot, color: 0xffffff, transparent: true, depthWrite: false });
-        const flakes = new THREE.Points(geo, mat);
-        scene.add(flakes);
+        weather.blessSnow();
         let t = 0;
-        // Falls for 100 s, settling over the first 50; melts over the next 70.
         return {
           update(dt) {
             t += dt;
-            const falling = t < 100;
-            mat.opacity = Math.max(0, fade(t, 100, 5));
-            // Settles to 80 % so roads and lawns still show through a little.
-            snow.value = 0.8 * (falling ? Math.min(1, t / 50) : Math.max(0, 1 - (t - 100) / 70));
-            for (let i = 0; i < count; i++) {
-              pos[i * 3 + 1] -= 0.45 * dt;
-              pos[i * 3] += Math.sin(t + i) * 0.08 * dt;
-              if (pos[i * 3 + 1] < 0) pos[i * 3 + 1] += 9;
-            }
-            geo.attributes.position.needsUpdate = true;
-            return t < 170;
+            return t < 100;
           },
-          end() {
-            scene.remove(flakes);
-            snow.value = 0;
-          },
+          end() { weather.cancelBlessing(); },
         };
       },
     },

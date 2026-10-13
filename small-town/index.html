@@ -40,6 +40,7 @@
   .clock { display: flex; align-items: baseline; gap: 10px; }
   .clock b { font: 600 34px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
   .clock span { font-size: 13px; color: var(--dim); }
+  .weather-status { white-space: nowrap; }
   .toggle { margin-left: auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px;
     background: rgba(255, 255, 255, .04); color: var(--text); font-size: 15px; cursor: pointer; }
   .toggle:hover { background: rgba(255, 255, 255, .1); }
@@ -50,6 +51,9 @@
   .row + .row { margin-top: 6px; }
   .row button { flex: 1; padding: 7px 0; border: 1px solid var(--line); border-radius: 9px; cursor: pointer;
     background: rgba(255, 255, 255, .04); color: var(--text); font-family: inherit; font-size: 13px; }
+  .panel .row + .row { margin-top: 5px; }
+  .panel .row button { padding: 5px 0; }
+  .weather-controls button { height: 30px; box-sizing: border-box; font-size: 12px; }
   .row button:hover { background: rgba(255, 255, 255, .1); }
   .row button.on { background: #f3f5f9; color: #111; }
   .hint { margin-top: 10px; font-size: 12px; color: var(--dim); }
@@ -273,7 +277,7 @@
     background: #0b1020; transition: opacity .6s; }
   #loading.done { opacity: 0; pointer-events: none; }
   @media (max-width: 600px) {
-    .panel { left: 12px; right: 12px; bottom: 12px; width: auto; }
+    .panel { left: 12px; right: 12px; bottom: 12px; width: auto; z-index: 3; }
     .panel.collapsed { left: auto; }
     .title { left: 16px; top: 14px; }
     .title h1 { font-size: 30px; }
@@ -314,7 +318,7 @@
 
 <div class="panel">
   <div class="clock">
-    <b id="clock">06:00</b><span id="period">早上</span>
+    <b id="clock">06:00</b><span id="period">早上</span><span id="weather-status" class="weather-status">晴天</span>
     <button id="toggle" class="toggle" aria-expanded="true" aria-controls="controls" title="收合（H）">▾</button>
   </div>
   <div id="controls">
@@ -330,6 +334,13 @@
     <button data-time="12">中午</button>
     <button data-time="18.2">黃昏</button>
     <button data-time="21">夜晚</button>
+  </div>
+  <div id="weather-controls" class="row weather-controls" role="group" aria-label="天氣">
+    <button data-weather="auto" class="on" aria-pressed="true" title="自動切換（目前晴天）">自動</button>
+    <button data-weather="sunny" aria-pressed="false" title="手動切換為晴天">晴</button>
+    <button data-weather="cloudy" aria-pressed="false" title="手動切換為陰天">陰</button>
+    <button data-weather="rain" aria-pressed="false" title="手動切換為雨天">雨</button>
+    <button data-weather="snow" aria-pressed="false" title="手動切換為雪天">雪</button>
   </div>
   <div class="row">
     <button data-quality="low" title="最快：關掉發光、移軸模糊、路燈照明與陰影">低畫質</button>

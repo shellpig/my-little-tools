@@ -11,6 +11,7 @@ import { PASSERBY_LINES } from './residents.js';
 import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
 import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
 import { LEVELS, levelById } from './levels/index.js';
+import { createWeather } from './weather.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
 import { createMusicPlayer } from './music.js';
@@ -202,6 +203,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 let quality = 'high';
+let weather = null;
 document.body.prepend(renderer.domElement);
 
 // Rails, trains and cars are cut off at the map's edge, so nothing that
@@ -318,9 +320,14 @@ function collect(fn) {
   return { parts: scene.children.slice(c0), solids: solids.slice(s0), posts: posts.slice(p0) };
 }
 
-const std = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, ...opts });
+const std = (color, opts = {}) => {
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9, ...opts });
+  patchSnow(mat);
+  return mat;
+};
 
 function box(w, h, d, mat, x, y, z, cast = false, parent = scene) {
+  patchSnow(mat);
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.set(x, y, z);
   m.castShadow = cast;
@@ -466,6 +473,7 @@ const kit = {};
 
 function paletteMaterial(textures, nightGlow, lightsOut, keep = 0) {
   const mat = new THREE.MeshStandardMaterial({ ...textures, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.8 });
+  patchSnow(mat);
   glowing.push([mat, nightGlow, lightsOut, keep]);
   return mat;
 }
@@ -495,6 +503,7 @@ function model(pack, name) {
     cache.set(url, loader.loadAsync(url).then(gltf => {
       if (pack === 'car-kit' || pack === 'train-kit') clipToMap(gltf.scene);
       if (pack === 'train-kit' && name.startsWith('train-')) lightCarriage(gltf.scene);
+      patchSnow(gltf.scene);
       return gltf;
     }));
   }
@@ -510,6 +519,7 @@ async function place(pack, name, { x = 0, y = 0, z = 0, rot = 0, scale = 1, mat 
     o.receiveShadow = true;
     if (mat) o.material = mat;
   });
+  patchSnow(obj);
   obj.position.set(x, y, z);
   obj.rotation.y = rot;
   if (Array.isArray(scale)) obj.scale.set(...scale);
@@ -768,6 +778,7 @@ const benchSeats = !PARK ? [] : [45, 135, 225, 315].flatMap(deg => {
 });
 
 function cylinder(rTop, rBottom, h, mat, x, y, z, segments = 24) {
+  patchSnow(mat);
   const m = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, h, segments), mat);
   m.position.set(x, y, z);
   m.castShadow = m.receiveShadow = true;
@@ -2686,11 +2697,45 @@ function applyTime(t) {
     l.visible = quality === 'high';
   }
   bloom.strength = 0.2 + 0.6 * night;
+  if (weather) weather.applyLighting();
 }
 
 // ---------- UI ----------
 
 const $ = id => document.getElementById(id);
+const WEATHER_LABELS = { sunny: '晴天', cloudy: '陰天', rain: '雨天', snow: '雪天' };
+const weatherButtons = [...document.querySelectorAll('[data-weather]')];
+let displayedWeather = null;
+function updateWeatherControls() {
+  if (!weather) return;
+  const current = weather.currentWeather();
+  const selection = weather.snapshot().selection;
+  $('weather-status').textContent = WEATHER_LABELS[current];
+  for (const button of weatherButtons) {
+    const selected = button.dataset.weather === selection;
+    button.classList.toggle('on', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    const title = button.dataset.weather === 'auto'
+      ? `自動切換（目前${WEATHER_LABELS[current]}）`
+      : `手動切換為${WEATHER_LABELS[button.dataset.weather]}`;
+    button.title = title;
+    button.setAttribute('aria-label', title);
+  }
+  displayedWeather = current;
+}
+function updateWeatherStatus() {
+  if (weather && weather.currentWeather() !== displayedWeather) updateWeatherControls();
+}
+weatherButtons.forEach(button => button.addEventListener('click', () => {
+  if (!weather) return;
+  weather.select(button.dataset.weather);
+  updateWeatherControls();
+  saveLayout();
+  button.blur();
+}));
+$('weather-controls').addEventListener('keydown', e => {
+  if (e.code === 'Enter' || e.code === 'Space') e.stopPropagation();
+});
 const slider = $('time');
 let dragging = false;
 slider.addEventListener('pointerdown', () => { dragging = true; });
@@ -2752,6 +2797,7 @@ function setQuality(q) {
   tiltH.enabled = tiltV.enabled = q === 'high';
   renderer.shadowMap.enabled = q === 'high';
   scene.traverse(o => { if (o.material) [o.material].flat().forEach(m => { m.needsUpdate = true; }); });
+  if (weather) weather.setQuality(q);
   applyTime(time);
   document.querySelectorAll('[data-quality]').forEach(b => b.classList.toggle('on', b.dataset.quality === q));
   try { localStorage.setItem('small-town:quality', q); } catch { /* storage unavailable */ }
@@ -3278,7 +3324,6 @@ function announce(text, color) {
 
 function addWishes() {
   if (LEVEL.wishes === false || !PARK) return;
-  patchSnow(scene);
   // Lane metadata for the blessings, derived from this level's own paths and
   // roads, so wishes.js needs no fixed-street assumptions.
   const alleyXs = [...new Set(LEVEL.paths.map(([x0, , x1]) => (x0 + x1) / 2))];
@@ -3292,6 +3337,7 @@ function addWishes() {
     setCrowdBoost: v => { crowdBoost = v; },
     pointerGround: () => pointerOnGround,
     streets: { back, alleys: alleyXs.length ? alleyXs : [0] },
+    weather,
   });
 }
 
@@ -3508,6 +3554,7 @@ function dressPlayer() {
   if (player.obj) scene.remove(player.obj);
   const gltf = peopleGltfs[PEOPLE.indexOf(`character-${player.look}`)];
   const obj = wardrobe.dress(player.look, player.outfit);
+  patchSnow(obj);
   obj.scale.setScalar(PERSON_SCALE);
   obj.position.copy(player.pos);
   obj.rotation.y = player.obj?.rotation.y ?? Math.PI;
@@ -4080,6 +4127,7 @@ function reseatCats(before, after) {
 // Only what differs from the default town, versioned for migration.
 function currentLayout() {
   const layout = { '#v': 2 };
+  if (weather) layout['#weather'] = weather.snapshot();
   const current = Object.fromEntries(tiles);
   if (JSON.stringify(sortedTiles(current)) !== JSON.stringify(sortedTiles(defaultTilesObj(LEVEL)))) layout['#tiles'] = current;
   if (JSON.stringify(zebras) !== JSON.stringify(DEFAULT_ZEBRAS)) layout['#zebras'] = zebras;
@@ -5503,6 +5551,9 @@ function updateFollow(dt) {
 const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
+  const weatherChanged = weather
+    ? weather.update(dt, speed > 0 ? dt * speed / 60 : 0)
+    : false;
   const a = Math.min(1, activity(time) + crowdBoost);
 
   if (LEVEL.atrain) {
@@ -5564,6 +5615,8 @@ function frame() {
     updateCats(dt);
   }
 
+  if (weatherChanged) saveLayout();
+  updateWeatherStatus();
   if (rail) updateBell(dt);
   if (wishes) wishes.update(dt);
   updatePlayer(dt);
@@ -5595,6 +5648,12 @@ if (rail) {
 await applyLayout();
 await Promise.all([addPeople(), addTraffic()]);
 addCats();
+weather = createWeather({ scene, camera, focus: controls.target, sun, hemi, bounds: LEVEL.bounds, cellSize: CELL });
+weather.restore(game.layout?.['#weather']);
+weather.setQuality(quality);
+patchSnow(scene);
+applyTime(time);
+updateWeatherControls();
 addWishes();
 // ---------- operations panel (P2-A) ----------
 
