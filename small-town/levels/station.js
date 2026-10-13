@@ -124,7 +124,7 @@ for (let i = -30; i <= 29; i++) railCells.push([i, 4]);
 
 export default {
   id: 'station',
-  name: '火車站',
+  name: '火車小鎮',
   atrain: true,
   fleet: DEFAULT_FLEET,
   timetable: DEFAULT_TIMETABLE,
