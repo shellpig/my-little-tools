@@ -200,6 +200,7 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+let lowQuality = false;
 document.body.prepend(renderer.domElement);
 
 // Rails, trains and cars are cut off at the map's edge, so nothing that
@@ -2679,7 +2680,10 @@ function applyTime(t) {
     const on = out === undefined ? 1 : 1 - (1 - keep) * lightsGone(t, out);
     mat.emissiveIntensity = glow * night * on + (mat.userData.boost ?? 0);
   }
-  for (const l of lamps) l.intensity = 2.2 * night;
+  for (const l of lamps) {
+    l.intensity = 2.2 * night;
+    l.visible = !lowQuality;
+  }
   bloom.strength = 0.2 + 0.6 * night;
 }
 
@@ -2711,6 +2715,24 @@ function setCollapsed(collapsed) {
 }
 try { setCollapsed(localStorage.getItem('small-town:collapsed') === '1'); } catch { /* storage unavailable */ }
 toggle.addEventListener('click', () => { setCollapsed(!panel.classList.contains('collapsed')); toggle.blur(); });
+
+// Low quality for machines without a graphics card: no bloom or tilt-shift,
+// no lamp lights (every pixel pays for each one, lit or not), no shadows and
+// one pixel per CSS pixel. Lit windows and bulbs still show. Remembered per browser.
+function setLowQuality(on) {
+  lowQuality = on;
+  const ratio = on ? 1 : Math.min(devicePixelRatio, 2);
+  renderer.setPixelRatio(ratio);
+  composer.setPixelRatio(ratio);
+  resize();
+  renderer.shadowMap.enabled = !on;
+  scene.traverse(o => { if (o.material) [o.material].flat().forEach(m => { m.needsUpdate = true; }); });
+  applyTime(time);
+  $('low-quality').classList.toggle('on', on);
+  try { localStorage.setItem('small-town:low-quality', on ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+$('low-quality').addEventListener('click', e => { setLowQuality(!lowQuality); e.currentTarget.blur(); });
+try { if (localStorage.getItem('small-town:low-quality') === '1') setLowQuality(true); } catch { /* storage unavailable */ }
 
 addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement) return;
@@ -5500,7 +5522,8 @@ function frame() {
   updateFollow(dt);
   controls.update();
   updateUI();
-  composer.render();
+  if (lowQuality) renderer.render(scene, camera);
+  else composer.render();
   requestAnimationFrame(frame);
 }
 
