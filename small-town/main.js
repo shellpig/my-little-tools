@@ -2717,6 +2717,28 @@ function setCollapsed(collapsed) {
 try { setCollapsed(localStorage.getItem('small-town:collapsed') === '1'); } catch { /* storage unavailable */ }
 toggle.addEventListener('click', () => { setCollapsed(!panel.classList.contains('collapsed')); toggle.blur(); });
 
+const leftMenu = $('left-menu');
+const leftMenuToggle = $('left-menu-toggle');
+function setLeftMenuCollapsed(collapsed) {
+  leftMenu.classList.toggle('collapsed', collapsed);
+  const label = collapsed ? '展開左側選單' : '收合左側選單';
+  leftMenuToggle.setAttribute('aria-expanded', String(!collapsed));
+  leftMenuToggle.setAttribute('aria-label', label);
+  leftMenuToggle.title = label;
+  leftMenuToggle.textContent = collapsed ? '›' : '‹';
+  try { localStorage.setItem('small-town:left-menu-collapsed', collapsed ? '1' : '0'); } catch { /* storage unavailable */ }
+}
+try {
+  if (localStorage.getItem('small-town:left-menu-collapsed') === '1') setLeftMenuCollapsed(true);
+} catch { /* storage unavailable */ }
+leftMenuToggle.addEventListener('click', () => {
+  setLeftMenuCollapsed(!leftMenu.classList.contains('collapsed'));
+  leftMenuToggle.blur();
+});
+leftMenu.addEventListener('keydown', e => {
+  if (e.code === 'Enter' || e.code === 'Space') e.stopPropagation();
+});
+
 // Quality for weaker machines. High has everything. Medium keeps the glow
 // around lit windows but drops tilt-shift, lamp lights (every pixel pays for
 // each one, lit or not) and shadows; low drops the glow too. Below high it
@@ -3510,8 +3532,11 @@ function togglePlay() {
   if (editing) setEditing(false);
   player.active = !player.active;
   document.body.classList.toggle('playing', player.active);
-  const [ico, label] = $('play').children;
+  const playButton = $('play');
+  const [ico, label] = playButton.children;
   [ico.textContent, label.textContent] = player.active ? ['🏙', '回到俯瞰（P）'] : ['🚶', '散步模式（P）'];
+  playButton.title = label.textContent;
+  playButton.setAttribute('aria-label', label.textContent);
   if (player.active) {
     player.pos.y = groundHeight(player.pos.x, player.pos.z);
     dressPlayer();
@@ -4162,8 +4187,11 @@ function setEditing(on) {
   if (on && player.active) togglePlay();
   editing = on;
   document.body.classList.toggle('editing', on);
-  const [ico, label] = $('edit').children;
+  const editButton = $('edit');
+  const [ico, label] = editButton.children;
   [ico.textContent, label.textContent] = on ? ['✅', '完成編輯（B）'] : ['🛠', '編輯（B）'];
+  editButton.title = label.textContent;
+  editButton.setAttribute('aria-label', label.textContent);
   if (!on) {
     setBrush(null);
     cancelPlacing();
@@ -5557,11 +5585,11 @@ if (rail) {
   muteBtn.hidden = false;
   const once = () => {
     removeEventListener('pointerdown', once);
-    removeEventListener('keydown', once);
+    removeEventListener('keydown', once, true);
     initAudio();
   };
   addEventListener('pointerdown', once);
-  addEventListener('keydown', once);
+  addEventListener('keydown', once, true);
 }
 await applyLayout();
 await Promise.all([addPeople(), addTraffic()]);

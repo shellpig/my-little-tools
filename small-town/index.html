@@ -94,6 +94,16 @@
   .play { min-width: 150px; text-align: left; }
   .play .ico { display: inline-block; width: 1.5em; text-align: center; }
   body.playing .play { background: #f3f5f9; color: #111; }
+  .left-menu { position: fixed; left: 28px; top: 112px; z-index: 8; }
+  .left-menu-items { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 160px); overflow-y: auto; }
+  .left-menu-toggle { display: block; width: 44px; height: 32px; margin: 0 0 8px; padding: 0; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel); color: var(--text); font-family: inherit; font-size: 18px; font-weight: 700;
+    line-height: 1; cursor: pointer; backdrop-filter: blur(12px); }
+  .left-menu-toggle:hover { background: rgba(40, 46, 62, .85); }
+  .left-menu .play { position: static; flex: none; }
+  .left-menu.collapsed .play { box-sizing: border-box; width: 44px; min-width: 44px; padding-right: 0; padding-left: 0; text-align: center; }
+  .left-menu.collapsed .play .label { display: none; }
+  #left-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .prompt { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px;
     background: rgba(16, 20, 30, .8); color: var(--text); font-size: 14px; pointer-events: none; }
   .stick, .act { display: none; }
@@ -109,13 +119,6 @@
     body.playing .act { display: block; }
     body.playing .prompt { display: none; }
   }
-  .dress { top: 156px; }
-  .edit { top: 200px; }
-  .ops { top: 244px; }
-  .newtown { top: 244px; }
-  body.has-ops .newtown { top: 288px; }
-  .music { top: 288px; }
-  body.has-ops .music { top: 332px; }
   .music.on { background: #f3f5f9; color: #111; }
   .music-panel { position: fixed; left: 194px; top: 112px; z-index: 10; width: 320px;
     max-height: calc(100vh - 140px); overflow: auto; box-sizing: border-box; padding: 16px;
@@ -273,14 +276,8 @@
     .title h1 { font-size: 30px; }
     .cats { top: auto; bottom: 96px; right: 12px; width: 200px; }
     .toast { right: 12px; top: 14px; }
-    .play { left: 16px; top: 100px; }
-    .dress { top: 144px; }
-    .edit { top: 188px; }
-    .ops { top: 232px; }
-    .newtown { top: 232px; }
-    body.has-ops .newtown { top: 276px; }
-    .music { top: 276px; }
-    body.has-ops .music { top: 320px; }
+    .left-menu { left: 16px; top: 100px; }
+    .left-menu-items { max-height: calc(100vh - 148px); }
     .music-panel { left: 12px; right: 12px; top: 100px; width: auto; max-height: calc(100dvh - 116px); }
     .ops-panel { left: 12px; right: 12px; top: 276px; width: auto; height: auto; transform: none; max-height: calc(100vh - 290px); }
     .ops-handle { display: none; }
@@ -348,11 +345,17 @@
   <div class="cats-total" id="cat-total"></div>
 </div>
 
-<button id="play" class="play"><span class="ico">🚶</span><span>散步模式（P）</span></button>
-<button id="dress" class="play dress"><span class="ico">👕</span><span>換裝（C）</span></button>
-<button id="edit" class="play edit"><span class="ico">🛠</span><span>編輯（B）</span></button>
-<button id="ops" class="play ops" hidden><span class="ico">🚆</span><span>經營</span></button>
-<button id="new-town" class="play newtown"><span class="ico">🏘</span><span>關卡與存檔</span></button>
+<nav id="left-menu" class="left-menu" aria-label="主要選單">
+  <button id="left-menu-toggle" class="left-menu-toggle" type="button" aria-expanded="true" aria-controls="left-menu-items" aria-label="收合左側選單" title="收合左側選單">‹</button>
+  <div id="left-menu-items" class="left-menu-items">
+    <button id="play" class="play" type="button" aria-label="散步模式（P）" title="散步模式（P）"><span class="ico">🚶</span><span class="label">散步模式（P）</span></button>
+    <button id="dress" class="play dress" type="button" aria-label="換裝（C）" title="換裝（C）"><span class="ico">👕</span><span class="label">換裝（C）</span></button>
+    <button id="edit" class="play edit" type="button" aria-label="編輯（B）" title="編輯（B）"><span class="ico">🛠</span><span class="label">編輯（B）</span></button>
+    <button id="ops" class="play ops" type="button" aria-label="經營" title="經營" hidden><span class="ico">🚆</span><span class="label">經營</span></button>
+    <button id="new-town" class="play newtown" type="button" aria-label="關卡與存檔" title="關卡與存檔"><span class="ico">🏘</span><span class="label">關卡與存檔</span></button>
+    <button id="music" class="play music" type="button" aria-controls="music-panel" aria-expanded="false" aria-label="音樂" title="音樂"><span class="ico">🎵</span><span class="label">音樂</span></button>
+  </div>
+</nav>
 <div class="edit-bar">
   <span>拖曳移動建築、樹、路燈 · R 旋轉 · Delete 刪除 · Ctrl+Z 復原</span>
   <button id="edit-undo">復原</button>
@@ -455,7 +458,6 @@
   <div id="paint-roof-box"><div class="opt-label">屋頂色</div><div id="paint-roofs" class="chips"></div></div>
 </div>
 <div id="prompt" class="prompt" hidden></div>
-<button id="music" class="play music" aria-controls="music-panel" aria-expanded="false"><span class="ico">🎵</span>音樂</button>
 <section id="music-panel" class="music-panel" aria-label="音樂播放器" hidden>
   <div class="slots-head"><b>🎵 音樂</b><button id="music-close" class="toggle" title="關閉音樂播放器（Esc）" aria-label="關閉音樂播放器">✕</button></div>
   <div class="row" style="margin-top:12px;">
