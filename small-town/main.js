@@ -15,6 +15,7 @@ import { createWeather } from './weather.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
 import { createMusicPlayer } from './music.js';
+import { createTrainSounds } from './train-sounds.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
   BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY, FACILITIES,
@@ -1563,6 +1564,10 @@ class Walker extends Person {
       }
       return;
     }
+    if (this.state === 'leaving') {
+      this.state = 'walking';
+      this.pts = null;
+    }
     if (this.pause > 0) {
       this.pause -= dt;
       if (this.pause <= 0) {
@@ -2653,6 +2658,7 @@ const SUN_LOW = new THREE.Color(0xffa060);
 const SUN_DAWN = new THREE.Color(0xdde4f0);
 const SUN_HIGH = new THREE.Color(0xfff2de);
 const MOON = new THREE.Color(0x9bb4ff);
+const MOON_DIR = new THREE.Vector3(0, 1, 0.6);
 const sky = new THREE.Color();
 const lightDir = new THREE.Vector3();
 
@@ -2682,15 +2688,11 @@ function applyTime(t) {
   const morning = t < 12;
 
   // The same light is the sun by day and the moon by night.
-  if (elevation >= 0) {
-    lightDir.set(Math.cos(angle), Math.max(elevation, 0.12), 0.6);
-    sun.intensity = 3 * smooth(elevation, -0.05, 0.3);
-    sun.color.lerpColors(morning ? SUN_DAWN : SUN_LOW, SUN_HIGH, smooth(elevation, 0, 0.45));
-  } else {
-    lightDir.set(-Math.cos(angle), Math.max(-elevation, 0.12), 0.6);
-    sun.intensity = 0.45 * smooth(-elevation, 0, 0.3);
-    sun.color.copy(MOON);
-  }
+  sun.color.lerpColors(morning ? SUN_DAWN : SUN_LOW, SUN_HIGH, smooth(elevation, 0, 0.45));
+  // Daylight fades into the moonlight level without a dark gap at sunset.
+  sun.intensity = 0.45 + 2.55 * smooth(elevation, 0, 0.3);
+  sun.color.lerp(MOON, night);
+  lightDir.set(Math.cos(angle), Math.max(elevation, 0.12), 0.6).lerp(MOON_DIR, night);
   sun.position.copy(lightDir.normalize().multiplyScalar(30));
 
   hemi.intensity = 0.3 + 0.7 * day;
@@ -5497,11 +5499,17 @@ let bellT = 0;
 let bellTone = -1;
 let muted = false;
 const muteBtn = $('mute');
+const trainSounds = createTrainSounds();
+addEventListener('pagehide', e => {
+  if (e.persisted) trainSounds.update([], 0, false);
+  else trainSounds.dispose();
+});
 
 // Two square waves that take turns, run through a quiet master gain. Browsers
 // only allow audio after a user gesture, so this waits for the first one.
 function initAudio() {
   audioCtx = new AudioContext();
+  trainSounds.init(audioCtx);
   const master = audioCtx.createGain();
   master.gain.value = 0.04;
   master.connect(audioCtx.destination);
@@ -5528,13 +5536,19 @@ muteBtn.addEventListener('click', () => { setMuted(!muted); muteBtn.blur(); });
 // Ding-dong while a nearby crossing is closed; real time, not game speed.
 function updateBell(dt) {
   if (!audioCtx) return;
-  const ringing = !muted && speed > 0 && rail.crossings.some(c =>
-    c.closed && Math.hypot(camera.position.x - c.x, camera.position.y, camera.position.z - c.z) < 40);
+  let volume = 0;
+  if (!muted && speed === 60) {
+    for (const c of rail.crossings) {
+      if (!c.closed) continue;
+      const distance = Math.hypot(camera.position.x - c.x, camera.position.y, camera.position.z - c.z);
+      volume = Math.max(volume, THREE.MathUtils.clamp((80 - distance) / 40, 0, 1));
+    }
+  }
+  const ringing = volume > 0;
   bellT = ringing ? bellT + dt : 0;
   const tone = ringing ? Math.floor(bellT / 0.35) % 2 : -1;
-  if (tone === bellTone) return;
   bellTone = tone;
-  tones.forEach((gain, k) => gain.gain.setTargetAtTime(k === tone ? 1 : 0, audioCtx.currentTime, 0.01));
+  tones.forEach((gain, k) => gain.gain.setTargetAtTime(k === tone ? volume : 0, audioCtx.currentTime, 0.01));
 }
 
 // ---------- train camera (P2-E) ----------
@@ -5662,6 +5676,11 @@ function frame() {
   if (weatherChanged) saveLayout();
   updateWeatherStatus();
   if (rail) updateBell(dt);
+  if (rail) trainSounds.update(Object.values(rail.directions).filter(lane => lane.train).map(({ train }) => ({
+    id: train,
+    kind: train.trainObj?.type === 'express' ? 'fast' : 'slow',
+    movement: THREE.MathUtils.clamp(train.speed / train.set.cruise, 0, 1),
+  })), dt, !muted && speed === 60, speed > 60);
   if (wishes) wishes.update(dt);
   updatePlayer(dt);
   updateTalk(dt);

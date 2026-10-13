@@ -368,13 +368,13 @@ export default {
       {
         "train": "t1",
         "dir": "west",
-        "hour": 20,
+        "hour": 21,
         "stop": true
       },
       {
         "train": "t2",
         "dir": "west",
-        "hour": 8,
+        "hour": 9,
         "stop": true
       },
       {
@@ -392,7 +392,7 @@ export default {
       {
         "train": "t3",
         "dir": "west",
-        "hour": 14,
+        "hour": 15,
         "stop": false
       }
     ],

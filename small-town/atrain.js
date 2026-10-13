@@ -103,10 +103,10 @@ export const DEFAULT_FLEET = [
 export const DEFAULT_TIMETABLE = [
   { train: 't1', dir: 'east', hour: 7, stop: true },
   { train: 't2', dir: 'west', hour: 9, stop: true },
-  { train: 't3', dir: 'east', hour: 14, stop: false },
-  { train: 't2', dir: 'east', hour: 18, stop: true },
-  { train: 't1', dir: 'west', hour: 20, stop: true },
-  { train: 't3', dir: 'west', hour: 21, stop: false },
+  { train: 't3', dir: 'east', hour: 13, stop: false },
+  { train: 't3', dir: 'west', hour: 15, stop: false },
+  { train: 't2', dir: 'east', hour: 19, stop: true },
+  { train: 't1', dir: 'west', hour: 21, stop: true },
 ];
 
 export const BUS_PRICE = 100;
