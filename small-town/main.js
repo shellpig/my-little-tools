@@ -10,7 +10,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { PASSERBY_LINES } from './residents.js';
 import { createWishes, patchSnow, BLESSINGS, RARITY } from './wishes.js';
 import { createWardrobe, PARTS, ACCESSORIES } from './wardrobe.js';
-import { LEVELS, levelById } from './levels/index.js';
+import { LEVELS, levelById, newLevelLayout } from './levels/index.js';
 import { createWeather } from './weather.js';
 import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
@@ -129,9 +129,11 @@ function readGame() {
   } catch { /* fall through to the old key */ }
   let old = null;
   try { old = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); } catch { /* storage unavailable */ }
-  const layout = migrateLayout(old && typeof old === 'object' ? old : {});
-  try { localStorage.setItem(GAME_KEY, JSON.stringify({ level: 'town', layout })); } catch { /* storage unavailable */ }
-  return { level: 'town', layout };
+  const legacy = old && typeof old === 'object';
+  const level = legacy ? 'town' : LEVELS[0].id;
+  const layout = legacy ? migrateLayout(old) : newLevelLayout(level);
+  try { localStorage.setItem(GAME_KEY, JSON.stringify({ level, layout })); } catch { /* storage unavailable */ }
+  return { level, layout };
 }
 
 const sortedTiles = obj => Object.keys(obj).sort().map(k => [k, obj[k]]);
@@ -5173,7 +5175,7 @@ function renderLevels() {
     go.textContent = '開始';
     go.onclick = () => {
       if (!confirm(`開始新的「${lv.name}」？目前未存檔的變動會消失。`)) return;
-      switchGame(lv.id, {});
+      switchGame(lv.id, newLevelLayout(lv.id));
     };
     body.append(name, blurb, go);
     card.append(img, body);
@@ -5231,7 +5233,7 @@ $('edit').addEventListener('click', e => { setEditing(!editing); e.currentTarget
 $('edit-undo').addEventListener('click', undo);
 $('edit-reset').addEventListener('click', () => {
   if (!confirm(`還原成預設的「${LEVEL.name}」？所有搬動和刪除都會清除。`)) return;
-  switchGame(LEVEL.id, {});
+  switchGame(LEVEL.id, newLevelLayout(LEVEL.id));
 });
 
 // ---------- town growth (P2-D) ----------
