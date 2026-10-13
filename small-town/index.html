@@ -121,6 +121,8 @@
   .fleet-card-info { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 12px; color: var(--dim); }
   .fleet-sell-btn { padding: 3px 8px; border: 1px solid rgba(255,100,100,.3); border-radius: 6px; background: rgba(255,80,80,.1); color: #ff9999; font-size: 12px; cursor: pointer; }
   .fleet-sell-btn:disabled { opacity: .4; cursor: default; }
+  .fleet-grip { cursor: grab; color: var(--dim); user-select: none; font-size: 14px; line-height: 1; flex-shrink: 0; }
+  .fleet-card.dragging, .tt-cell.dragging { opacity: .45; }
   .ops-buy-list { display: flex; flex-direction: column; gap: 6px; }
   .ops-buy-row { display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .04); color: var(--text); font-family: inherit; font-size: 13px; text-align: left; cursor: pointer; }
   .ops-buy-row:hover { background: rgba(255, 255, 255, .08); }
@@ -141,6 +143,8 @@
   .tt-cell:hover { background: rgba(255, 255, 255, .1); }
   .tt-cell.assigned { background: rgba(255, 210, 122, .12); color: #fff; font-weight: 600; }
   .tt-cell.error { border: 1px solid #ff5555 !important; background: rgba(255, 85, 85, .15) !important; color: #ff8888 !important; }
+  .tt-cell.drop-ok { outline: 2px solid #58d68d; background: rgba(88, 214, 141, .2) !important; }
+  .tt-cell.drop-bad { outline: 2px solid #ff5555; background: rgba(255, 85, 85, .2) !important; }
   body.editing .edit { background: #f3f5f9; color: #111; }
   .edit-bar { position: fixed; left: 50%; bottom: 24px; z-index: 4; display: none; align-items: center; gap: 10px;
     transform: translateX(-50%); padding: 8px 10px 8px 16px; border: 1px solid var(--line); border-radius: 999px;
@@ -348,6 +352,7 @@
       <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車</div>
       <div class="ops-buy-list" id="ops-buy-buttons"></div>
       <div class="opt-label" style="font-weight:700;margin-top:14px;">運行班表（24 小時整點）</div>
+      <div style="font-size:12px;color:var(--dim);margin:2px 0 4px;">點格子設定，或把車隊卡片、已排班的格子拖到格子上</div>
       <div id="ops-timetable" class="ops-timetable-wrap"></div>
     </div>
     <div id="ops-bus-tab" hidden>

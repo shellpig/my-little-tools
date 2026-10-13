@@ -5861,6 +5861,50 @@ function setupOpsPanel() {
     buyBox.appendChild(buyBtn);
   }
 
+  let dragSource = null;
+
+  function commitTimetable(next) {
+    p2State.timetable = next;
+    if (rail) rail.setTimetable(p2State.timetable);
+    saveLayout();
+    renderTimetable();
+  }
+
+  function clearDropClasses() {
+    const list = document.querySelectorAll('.tt-cell.drop-ok, .tt-cell.drop-bad');
+    for (const el of list) {
+      el.classList.remove('drop-ok', 'drop-bad');
+    }
+  }
+
+  function checkCanDrop(targetHour, targetDir) {
+    const base = p2State.timetable.filter(t => {
+      if (t.hour === targetHour && t.dir === targetDir) return false;
+      if (dragSource.type === 'cell' && t.hour === dragSource.sourceHour && t.dir === dragSource.sourceDir) return false;
+      return true;
+    });
+    const check = canAssignTrain(p2State.fleet, base, targetHour, targetDir, dragSource.trainId, dragSource.stop);
+    return { ...check, base };
+  }
+
+  function handleDrop(targetHour, targetDir) {
+    if (!dragSource) return;
+    if (dragSource.type === 'cell' && dragSource.sourceHour === targetHour && dragSource.sourceDir === targetDir) {
+      return;
+    }
+    const check = checkCanDrop(targetHour, targetDir);
+    if (!check.valid) {
+      showToast(`無法排班：${check.reason}`);
+      return;
+    }
+    commitTimetable([...check.base, {
+      train: dragSource.trainId,
+      dir: targetDir,
+      hour: targetHour,
+      stop: dragSource.stop,
+    }]);
+  }
+
   function renderFleetList() {
     const listEl = $('ops-fleet-list');
     if (!listEl) return;
@@ -5871,14 +5915,38 @@ function setupOpsPanel() {
     for (const train of p2State.fleet) {
       const card = document.createElement('div');
       card.className = 'fleet-card';
+      card.draggable = true;
+      card.title = '拖到班表格子排班';
+      card.addEventListener('dragstart', e => {
+        dragSource = {
+          type: 'card',
+          trainId: train.id,
+          stop: true,
+        };
+        card.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', train.id);
+        e.dataTransfer.effectAllowed = 'copyMove';
+      });
+      card.addEventListener('dragend', () => {
+        dragSource = null;
+        card.classList.remove('dragging');
+        clearDropClasses();
+      });
 
       const head = document.createElement('div');
       head.className = 'fleet-card-head';
+
+      const grip = document.createElement('span');
+      grip.className = 'fleet-grip';
+      grip.textContent = '⠿';
+      grip.title = '拖到班表格子排班';
+      head.appendChild(grip);
 
       const nameInput = document.createElement('input');
       nameInput.type = 'text';
       nameInput.maxLength = 12;
       nameInput.value = train.name;
+      nameInput.draggable = false;
       nameInput.title = '點擊修改車名';
       nameInput.addEventListener('keydown', e => e.stopPropagation());
       nameInput.addEventListener('change', () => {
@@ -6078,16 +6146,51 @@ function setupOpsPanel() {
           const trainName = train ? train.name : '未知列車';
           cell.textContent = `${trainName} · ${trip.stop ? '停' : '過'}`;
           cell.classList.add('assigned');
+          cell.draggable = true;
           if (err) {
             cell.classList.add('error');
             cell.title = `⚠️ ${err}`;
           } else {
             cell.title = `${trainName}（${trip.stop ? '停靠晴川站' : '通過不停'}）`;
           }
+          cell.addEventListener('dragstart', e => {
+            dragSource = {
+              type: 'cell',
+              trainId: trip.train,
+              stop: trip.stop,
+              sourceHour: h,
+              sourceDir: dir,
+            };
+            cell.classList.add('dragging');
+            e.dataTransfer.setData('text/plain', trip.train);
+            e.dataTransfer.effectAllowed = 'move';
+          });
+          cell.addEventListener('dragend', () => {
+            dragSource = null;
+            cell.classList.remove('dragging');
+            clearDropClasses();
+          });
         } else {
           cell.textContent = '—';
           cell.title = '點擊排定班次';
         }
+
+        cell.addEventListener('dragover', e => {
+          if (!dragSource) return;
+          e.preventDefault();
+          const check = checkCanDrop(h, dir);
+          cell.classList.toggle('drop-ok', check.valid);
+          cell.classList.toggle('drop-bad', !check.valid);
+        });
+        cell.addEventListener('dragleave', () => {
+          cell.classList.remove('drop-ok', 'drop-bad');
+        });
+        cell.addEventListener('drop', e => {
+          if (!dragSource) return;
+          e.preventDefault();
+          cell.classList.remove('drop-ok', 'drop-bad');
+          handleDrop(h, dir);
+        });
 
         cell.addEventListener('click', () => openCellModal(h, dir));
         td.appendChild(cell);
@@ -6189,11 +6292,8 @@ function setupOpsPanel() {
   });
 
   $('ops-modal-clear')?.addEventListener('click', () => {
-    p2State.timetable = p2State.timetable.filter(t => !(t.hour === modalHour && t.dir === modalDir));
-    if (rail) rail.setTimetable(p2State.timetable);
-    saveLayout();
+    commitTimetable(p2State.timetable.filter(t => !(t.hour === modalHour && t.dir === modalDir)));
     $('ops-cell-modal').hidden = true;
-    renderTimetable();
   });
 
   $('ops-modal-confirm')?.addEventListener('click', () => {
@@ -6213,11 +6313,8 @@ function setupOpsPanel() {
       hour: modalHour,
       stop: modalStop,
     });
-    p2State.timetable = remaining;
-    if (rail) rail.setTimetable(p2State.timetable);
-    saveLayout();
+    commitTimetable(remaining);
     $('ops-cell-modal').hidden = true;
-    renderTimetable();
   });
 }
 
