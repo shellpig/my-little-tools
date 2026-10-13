@@ -5578,6 +5578,63 @@ function setupOpsPanel() {
 
   opsBtn.hidden = false;
 
+  const opsSize = { w: 760, h: 720 };
+  try {
+    const saved = JSON.parse(localStorage.getItem('small-town:ops-size'));
+    if (saved && Number.isFinite(saved.w) && Number.isFinite(saved.h)) {
+      opsSize.w = Math.round(saved.w);
+      opsSize.h = Math.round(saved.h);
+    }
+  } catch { /* storage unavailable */ }
+
+  function applyOpsSize() {
+    if (window.innerWidth <= 600) {
+      opsPanel.style.width = '';
+      opsPanel.style.height = '';
+      return;
+    }
+    const maxW = Math.max(420, window.innerWidth - 32);
+    const maxH = Math.max(320, window.innerHeight - 32);
+    opsSize.w = Math.min(Math.max(opsSize.w, 420), maxW);
+    opsSize.h = Math.min(Math.max(opsSize.h, 320), maxH);
+    opsPanel.style.width = `${opsSize.w}px`;
+    opsPanel.style.height = `${opsSize.h}px`;
+  }
+  applyOpsSize();
+  window.addEventListener('resize', applyOpsSize);
+
+  let dragAxis = null;
+  let dragPointerId = null;
+  for (const handle of opsPanel.querySelectorAll('.ops-handle')) {
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      handle.setPointerCapture(e.pointerId);
+      dragAxis = handle.dataset.axis;
+      dragPointerId = e.pointerId;
+      e.preventDefault();
+    });
+  }
+  window.addEventListener('pointermove', e => {
+    if (!dragAxis || dragPointerId !== e.pointerId) return;
+    if (dragAxis === 'x' || dragAxis === 'xy') {
+      opsSize.w = Math.round(2 * Math.abs(e.clientX - window.innerWidth / 2));
+    }
+    if (dragAxis === 'y' || dragAxis === 'xy') {
+      opsSize.h = Math.round(2 * Math.abs(e.clientY - window.innerHeight / 2));
+    }
+    applyOpsSize();
+  });
+  function finishDrag(e) {
+    if (!dragAxis || dragPointerId !== e.pointerId) return;
+    dragAxis = null;
+    dragPointerId = null;
+    try {
+      localStorage.setItem('small-town:ops-size', JSON.stringify({ w: opsSize.w, h: opsSize.h }));
+    } catch { /* storage unavailable */ }
+  }
+  window.addEventListener('pointerup', finishDrag);
+  window.addEventListener('pointercancel', finishDrag);
+
   function toggleOps(show) {
     const willShow = show !== undefined ? show : opsPanel.hidden;
     opsPanel.hidden = !willShow;

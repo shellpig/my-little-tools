@@ -115,7 +115,6 @@
   .newtown { top: 244px; }
   body.has-ops .newtown { top: 288px; }
   body.has-ops #ops { display: block; }
-  .ops-panel { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 120px); }
   .fleet-card { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .04); margin-bottom: 6px; font-size: 13px; }
   .fleet-card-head { display: flex; align-items: center; gap: 8px; }
   .fleet-card input { flex: 1; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(255, 255, 255, .06); color: var(--text); font-family: inherit; font-size: 13px; }
@@ -161,6 +160,18 @@
   .slot button:disabled { opacity: .4; cursor: default; }
   .add-panel { position: fixed; left: 28px; top: 292px; z-index: 6; width: 300px; max-height: calc(100vh - 374px); overflow: auto;
     box-sizing: border-box; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(16, 20, 30, .94); }
+  .ops-panel { left: 50%; top: 50%; z-index: 7; transform: translate(-50%, -50%); display: flex; flex-direction: column; overflow: hidden;
+    width: min(760px, calc(100vw - 32px)); height: min(720px, calc(100vh - 32px)); max-height: none; }
+  .ops-panel[hidden] { display: none; }
+  /* Only the body scrolls, so the resize handles stay on the frame. */
+  .ops-body { flex: 1; min-height: 0; overflow: auto; }
+  .ops-handle { position: absolute; user-select: none; touch-action: none; }
+  .ops-handle-r { top: 0; right: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 9; }
+  .ops-handle-b { left: 0; bottom: 0; right: 0; height: 8px; cursor: ns-resize; z-index: 9; }
+  .ops-handle-br { right: 3px; bottom: 3px; width: 16px; height: 16px; cursor: nwse-resize; z-index: 10; }
+  .ops-handle-br::after { content: ''; position: absolute; right: 2px; bottom: 4px; width: 8px; height: 1.5px;
+    background: var(--dim); transform: rotate(-45deg); border-radius: 1px; }
+  .ops-handle-br:hover::after { background: var(--text); }
   .add-panel[hidden], #add-walls[hidden], #add-roofs[hidden], #paint-roof-box[hidden], #add-shop[hidden], #add-paving[hidden], #add-model-box[hidden] { display: none; }
   .add-models { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
   .add-models button { padding: 0; aspect-ratio: 1; overflow: hidden; border: 2px solid transparent; border-radius: 10px;
@@ -234,7 +245,8 @@
     .ops { top: 232px; }
     .newtown { top: 232px; }
     body.has-ops .newtown { top: 276px; }
-    .ops-panel { left: 12px; right: 12px; top: 276px; width: auto; }
+    .ops-panel { left: 12px; right: 12px; top: 276px; width: auto; height: auto; transform: none; max-height: calc(100vh - 290px); }
+    .ops-handle { display: none; }
     .edit-bar span { display: none; }
     .slot { flex-wrap: wrap; }
     .slot img, .slot .shot-empty { flex: none; }
@@ -309,52 +321,57 @@
   <button id="edit-reset">還原預設</button>
 </div>
 <div id="ops-panel" class="add-panel ops-panel" hidden>
+  <div class="ops-handle ops-handle-r" data-axis="x"></div>
+  <div class="ops-handle ops-handle-b" data-axis="y"></div>
+  <div class="ops-handle ops-handle-br" data-axis="xy"></div>
   <div class="slots-head"><b>🚆 經營管理</b><button id="ops-close" class="toggle" title="關閉">✕</button></div>
-  <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0;cursor:pointer;">
-    <input type="checkbox" id="ops-unlimited"> 無限資金
-  </label>
-  <div class="chips" id="ops-tabs">
-    <button class="on" data-tab="train">火車</button>
-    <button data-tab="bus">公車</button>
-    <button data-tab="town">小鎮</button>
-  </div>
-  <div id="ops-train-tab">
-    <div class="opt-label" style="font-weight:700;margin-top:10px;">車隊清單</div>
-    <div id="ops-fleet-list"></div>
-    <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車</div>
-    <div class="chips" id="ops-buy-buttons"></div>
-    <div class="opt-label" style="font-weight:700;margin-top:14px;">運行班表（24 小時整點）</div>
-    <div id="ops-timetable" class="ops-timetable-wrap"></div>
-  </div>
-  <div id="ops-bus-tab" hidden>
-    <div class="opt-label" style="font-weight:700;margin-top:10px;">公車清單</div>
-    <div id="ops-bus-list"></div>
-    <div class="opt-label" style="font-weight:700;margin-top:12px;">購買公車</div>
-    <div class="chips" id="ops-bus-buy"></div>
-  </div>
-  <div id="ops-town-tab" hidden>
-    <div class="ops-stats">
-      <div class="fleet-card ops-stat">
-        <div id="ops-town-pop" class="ops-stat-num">0</div>
-        <div class="ops-stat-sub">人口</div>
-      </div>
-      <div class="fleet-card ops-stat">
-        <div id="ops-town-homes" class="ops-stat-num">0</div>
-        <div class="ops-stat-sub">住宅</div>
-      </div>
-      <div class="fleet-card ops-stat">
-        <div id="ops-town-shops" class="ops-stat-num">0</div>
-        <div class="ops-stat-sub">商店</div>
-      </div>
-    </div>
-    <div id="ops-town-yesterday"></div>
-    <div class="opt-label" style="font-weight:700;margin-top:12px;">最近 7 天資金</div>
-    <div id="ops-town-chart"></div>
-    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:12px 0 8px;cursor:pointer;">
-      <input type="checkbox" id="ops-growth-on"> 自動成長
+  <div class="ops-body">
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0;cursor:pointer;">
+      <input type="checkbox" id="ops-unlimited"> 無限資金
     </label>
-    <div class="opt-label" style="font-weight:700;margin-top:10px;">成長速度</div>
-    <div class="chips" id="ops-growth-speeds"></div>
+    <div class="chips" id="ops-tabs">
+      <button class="on" data-tab="train">火車</button>
+      <button data-tab="bus">公車</button>
+      <button data-tab="town">小鎮</button>
+    </div>
+    <div id="ops-train-tab">
+      <div class="opt-label" style="font-weight:700;margin-top:10px;">車隊清單</div>
+      <div id="ops-fleet-list"></div>
+      <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車</div>
+      <div class="chips" id="ops-buy-buttons"></div>
+      <div class="opt-label" style="font-weight:700;margin-top:14px;">運行班表（24 小時整點）</div>
+      <div id="ops-timetable" class="ops-timetable-wrap"></div>
+    </div>
+    <div id="ops-bus-tab" hidden>
+      <div class="opt-label" style="font-weight:700;margin-top:10px;">公車清單</div>
+      <div id="ops-bus-list"></div>
+      <div class="opt-label" style="font-weight:700;margin-top:12px;">購買公車</div>
+      <div class="chips" id="ops-bus-buy"></div>
+    </div>
+    <div id="ops-town-tab" hidden>
+      <div class="ops-stats">
+        <div class="fleet-card ops-stat">
+          <div id="ops-town-pop" class="ops-stat-num">0</div>
+          <div class="ops-stat-sub">人口</div>
+        </div>
+        <div class="fleet-card ops-stat">
+          <div id="ops-town-homes" class="ops-stat-num">0</div>
+          <div class="ops-stat-sub">住宅</div>
+        </div>
+        <div class="fleet-card ops-stat">
+          <div id="ops-town-shops" class="ops-stat-num">0</div>
+          <div class="ops-stat-sub">商店</div>
+        </div>
+      </div>
+      <div id="ops-town-yesterday"></div>
+      <div class="opt-label" style="font-weight:700;margin-top:12px;">最近 7 天資金</div>
+      <div id="ops-town-chart"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:12px 0 8px;cursor:pointer;">
+        <input type="checkbox" id="ops-growth-on"> 自動成長
+      </label>
+      <div class="opt-label" style="font-weight:700;margin-top:10px;">成長速度</div>
+      <div class="chips" id="ops-growth-speeds"></div>
+    </div>
   </div>
 </div>
 <div id="ops-cell-modal" class="levels" hidden>
