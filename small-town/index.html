@@ -130,7 +130,10 @@
   .music-volume { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; }
   .music-volume input { flex: 1; min-width: 0; }
   .music-volume output { width: 34px; text-align: right; }
-  .music-repeat { display: flex; align-items: center; gap: 6px; margin: 10px 0; font-size: 13px; }
+  .music-item { display: flex; align-items: center; gap: 8px; }
+  .music-item input[type=checkbox] { margin: 0 0 0 2px; cursor: pointer; }
+  .music-item button { flex: 1; min-width: 0; }
+  #music-bgm-modes[hidden] { display: none; }
   .music-list { display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow: auto; margin: 10px 0; }
   .music-list button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
     background: rgba(255, 255, 255, .04); color: var(--text); font-family: inherit; text-align: left;
@@ -463,6 +466,9 @@
   <div class="row" style="margin-top:12px;">
     <button id="music-bgm" class="on">預設 BGM</button><button id="music-local" disabled>本地音樂</button>
   </div>
+  <div class="row" id="music-bgm-modes">
+    <button id="music-mode-clock" class="on">依時段</button><button id="music-mode-loop">循環</button>
+  </div>
   <b id="music-title" class="music-title">Sunny Station</b>
   <input id="music-seek" type="range" min="0" max="1" step="0.1" value="0" aria-label="播放進度" disabled>
   <output id="music-time" class="music-time">0:00 / --:--</output>
@@ -472,7 +478,6 @@
     <button id="music-next" aria-label="下一首" disabled>⏭</button>
   </div>
   <label class="music-volume">音量<input id="music-volume" type="range" min="0" max="100" value="35"><output id="music-volume-value">35%</output></label>
-  <label class="music-repeat"><input id="music-repeat" type="checkbox" checked>循環播放清單</label>
   <div class="row"><button id="music-choose">選擇本地音樂檔案</button></div>
   <input id="music-files" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" multiple hidden>
   <div id="music-list" class="music-list" aria-label="播放清單"></div>

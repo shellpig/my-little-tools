@@ -5572,6 +5572,7 @@ function frame() {
   updateFollow(dt);
   controls.update();
   updateUI();
+  music.tick(time, speed);
   if (quality === 'low') renderer.render(scene, camera);
   else composer.render();
   requestAnimationFrame(frame);
@@ -6375,6 +6376,6 @@ function setupOpsPanel() {
 
 await addWardrobe();
 setupOpsPanel();
-createMusicPlayer();
+const music = createMusicPlayer();
 $('loading').classList.add('done');
 frame();
