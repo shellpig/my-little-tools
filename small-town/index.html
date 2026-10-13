@@ -121,6 +121,14 @@
   .fleet-card-info { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 12px; color: var(--dim); }
   .fleet-sell-btn { padding: 3px 8px; border: 1px solid rgba(255,100,100,.3); border-radius: 6px; background: rgba(255,80,80,.1); color: #ff9999; font-size: 12px; cursor: pointer; }
   .fleet-sell-btn:disabled { opacity: .4; cursor: default; }
+  .ops-buy-list { display: flex; flex-direction: column; gap: 6px; }
+  .ops-buy-row { display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .04); color: var(--text); font-family: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+  .ops-buy-row:hover { background: rgba(255, 255, 255, .08); }
+  .ops-buy-thumb { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
+  .ops-buy-info { flex: 1; min-width: 0; }
+  .ops-buy-name { font-weight: 700; font-size: 13px; }
+  .ops-buy-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .ops-buy-action { color: var(--accent); font-weight: 700; font-size: 13px; margin-left: 8px; flex-shrink: 0; }
   .ops-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
   .ops-stat { text-align: center; padding: 8px 4px; margin-bottom: 0; }
   .ops-stat-num { font-size: 18px; font-weight: 700; color: var(--accent); }
@@ -338,7 +346,7 @@
       <div class="opt-label" style="font-weight:700;margin-top:10px;">車隊清單</div>
       <div id="ops-fleet-list"></div>
       <div class="opt-label" style="font-weight:700;margin-top:12px;">購買新車</div>
-      <div class="chips" id="ops-buy-buttons"></div>
+      <div class="ops-buy-list" id="ops-buy-buttons"></div>
       <div class="opt-label" style="font-weight:700;margin-top:14px;">運行班表（24 小時整點）</div>
       <div id="ops-timetable" class="ops-timetable-wrap"></div>
     </div>

@@ -5989,12 +5989,40 @@ function setupOpsPanel() {
   function renderBuyButtons() {
     const buyBox = $('ops-buy-buttons');
     if (!buyBox) return;
-    buyBox.innerHTML = '';
+    buyBox.textContent = '';
     for (const [typeKey, tdef] of Object.entries(TRAIN_TYPES)) {
-      const btn = document.createElement('button');
-      btn.textContent = `+ ${tdef.name}`;
-      btn.title = `購買 ${tdef.name}（速度 ${tdef.speed}×，載客 ${tdef.seats} 人）`;
-      btn.addEventListener('click', async () => {
+      const row = document.createElement('button');
+      row.className = 'ops-buy-row';
+      row.type = 'button';
+
+      const img = document.createElement('img');
+      img.className = 'ops-buy-thumb';
+      img.src = `assets/train-kit/Previews/${tdef.units[0]}.png`;
+      img.alt = '';
+      row.appendChild(img);
+
+      const info = document.createElement('div');
+      info.className = 'ops-buy-info';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'ops-buy-name';
+      nameEl.textContent = tdef.name;
+      info.appendChild(nameEl);
+
+      const subEl = document.createElement('div');
+      subEl.className = 'ops-buy-sub';
+      const tourismText = tdef.tourism ? ` · 觀光 ×${tdef.tourism}` : '';
+      subEl.textContent = `速 ${tdef.speed}× · 限 ${tdef.seats} 人 · ${tdef.price.toLocaleString('en-US')} 萬${tourismText}`;
+      info.appendChild(subEl);
+
+      row.appendChild(info);
+
+      const action = document.createElement('span');
+      action.className = 'ops-buy-action';
+      action.textContent = '＋購買';
+      row.appendChild(action);
+
+      row.addEventListener('click', async () => {
         if (!spend(tdef.price)) return;
         const count = p2State.fleet.filter(t => t.type === typeKey).length + 1;
         const newTrain = {
@@ -6007,7 +6035,7 @@ function setupOpsPanel() {
         saveLayout();
         renderOpsPanel();
       });
-      buyBox.appendChild(btn);
+      buyBox.appendChild(row);
     }
   }
 
