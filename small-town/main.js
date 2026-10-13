@@ -722,6 +722,11 @@ function buildStation(commercial) {
     const pivotBounds = new THREE.Box3();
     for (const part of [obj, ...c.parts.filter(part => part !== southPlatform)]) pivotBounds.expandByObject(part);
     pivotBounds.max.z = Math.max(pivotBounds.max.z, 6.0);
+    // Fill the grass between the station facade and the street sidewalk,
+    // without shifting the saved pivot of the station.
+    const bounds = new THREE.Box3().setFromObject(obj);
+    c.parts.push(box(bounds.max.x - bounds.min.x, 0.04, bounds.min.z - FRONTAGE, kit.pavement,
+      (bounds.min.x + bounds.max.x) / 2, 0.02, (bounds.min.z + FRONTAGE) / 2));
     const item = editable('station', [obj, ...c.parts], {
       ...c,
       pivotBounds,
