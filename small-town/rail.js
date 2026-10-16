@@ -331,6 +331,17 @@ export async function buildRail(ctx) {
   ranMap.set(opsDay, new Map());
   const backhauls = [];
   const cancels = [];
+  // Trips already billed per ops day, so a trip re-run after the clock is
+  // turned back does not count its fare or backhaul twice.
+  const billed = new Map();
+  function billRun(day, key, kind, type) {
+    if (!billed.has(day)) billed.set(day, new Set());
+    const done = billed.get(day);
+    const k = kind === 'backhaul' ? key + '_backhaul' : key;
+    if (done.has(k)) return;
+    done.add(k);
+    if (ctx.onTrainRun) ctx.onTrainRun(kind, type);
+  }
 
   for (const lane of directions) {
     lane.waitingQueue = [];
@@ -721,7 +732,7 @@ export async function buildRail(ctx) {
                 // Backhaul off-map
                 trainObj.at = reqSource;
                 backhauls.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'backhaul' });
-                if (ctx.onTrainRun) ctx.onTrainRun('backhaul', trainObj.type);
+                billRun(targetDay, tripKey, 'backhaul', trainObj.type);
               } else {
                 dayRan.set(tripKey, 'cancel');
                 cancels.push({ day: targetDay, train: trainObj.id, hour: t.hour, dir: t.dir, type: 'cancel', reason: 'not_idle_enough' });
@@ -734,11 +745,11 @@ export async function buildRail(ctx) {
               lane.waitingQueue.push({ trainObj, trip: t, day: targetDay });
               trainObj.run = t;
               dayRan.set(tripKey, 'waiting');
-              if (ctx.onTrainRun) ctx.onTrainRun(t.stop ? 'stop' : 'pass', trainObj.type);
+              billRun(targetDay, tripKey, t.stop ? 'stop' : 'pass', trainObj.type);
             } else {
               launchAtrain(lane, trainObj, t);
               dayRan.set(tripKey, 'run');
-              if (ctx.onTrainRun) ctx.onTrainRun(t.stop ? 'stop' : 'pass', trainObj.type);
+              billRun(targetDay, tripKey, t.stop ? 'stop' : 'pass', trainObj.type);
             }
           }
         }
@@ -855,6 +866,22 @@ export async function buildRail(ctx) {
             }
           }
         }
+      } else if (targetMinutes < clockMinutes) {
+        // Turning the clock back: trips that enter after the new time run
+        // again, and every train waits at the end its next trip leaves from.
+        for (const targetDay of [opsDay, opsDay + 1]) {
+          const dayRan = ranMap.get(targetDay);
+          if (!dayRan) continue;
+          const dayBase = targetDay * 1440;
+          for (const t of timetable) {
+            const trainObj = fleetMap.get(t.train);
+            if (!trainObj) continue;
+            const approach = getApproachMinutes(trainObj.type, t.dir, t.stop);
+            const arrivalMinute = dayBase + (t.hour >= 6 ? t.hour : 24 + t.hour) * 60;
+            if (arrivalMinute - approach >= targetMinutes) dayRan.delete(t.hour + '_' + t.dir);
+          }
+        }
+        for (const train of fleetMap.values()) initSingleTrainPosition(train, targetMinutes);
       }
       clockMinutes = targetMinutes;
     },
@@ -866,6 +893,9 @@ export async function buildRail(ctx) {
       if (!ranMap.has(newDay)) ranMap.set(newDay, new Map());
       for (const day of ranMap.keys()) {
         if (day < newDay - 1) ranMap.delete(day);
+      }
+      for (const day of billed.keys()) {
+        if (day < newDay - 1) billed.delete(day);
       }
     },
     async addTrain(trainData) {

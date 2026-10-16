@@ -5528,6 +5528,8 @@ function initAudio() {
 function setMuted(val) {
   muted = val;
   muteBtn.textContent = muted ? '🔕' : '🔔';
+  // Mutes the music too, without touching the music player's own settings.
+  $('music-audio').muted = muted;
   try { localStorage.setItem('small-town:muted', muted ? '1' : '0'); } catch { /* storage unavailable */ }
 }
 try { setMuted(localStorage.getItem('small-town:muted') === '1'); } catch { /* storage unavailable */ }
@@ -5699,7 +5701,6 @@ function frame() {
 await buildTown();
 await initRail();
 if (rail) {
-  muteBtn.hidden = false;
   const once = () => {
     removeEventListener('pointerdown', once);
     removeEventListener('keydown', once, true);
