@@ -5,6 +5,7 @@
 export const TRAIN_TYPES = {
   local: {
     name: '普通電車',
+    shortName: '普通',
     units: ['train-electric-square-a', 'train-electric-square-b', 'train-electric-square-b', 'train-electric-square-c'],
     speed: 1.0,
     price: 1000,
@@ -14,6 +15,7 @@ export const TRAIN_TYPES = {
   },
   subway: {
     name: '區間快車',
+    shortName: '區間',
     units: ['train-electric-subway-a', 'train-electric-subway-b', 'train-electric-subway-b', 'train-electric-subway-c'],
     speed: 1.2,
     price: 1200,
@@ -23,6 +25,7 @@ export const TRAIN_TYPES = {
   },
   city: {
     name: '都會電車',
+    shortName: '都會',
     units: ['train-electric-city-a', 'train-electric-city-b', 'train-electric-city-b', 'train-electric-city-c'],
     speed: 1.0,
     price: 1500,
@@ -32,6 +35,7 @@ export const TRAIN_TYPES = {
   },
   retro: {
     name: '復古客車',
+    shortName: '復古',
     units: ['train-locomotive-passenger-a', 'train-locomotive-passenger-b', 'train-locomotive-passenger-b'],
     speed: 0.8,
     price: 1800,
@@ -42,6 +46,7 @@ export const TRAIN_TYPES = {
   },
   express: {
     name: '雙層特急',
+    shortName: '特急',
     units: ['train-electric-double-a', 'train-electric-double-b', 'train-electric-double-b', 'train-electric-double-c'],
     speed: 1.5,
     price: 2000,
