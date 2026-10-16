@@ -6266,10 +6266,13 @@ function setupOpsPanel() {
 
       row.addEventListener('click', async () => {
         if (!spend(tdef.price)) return;
-        const count = p2State.fleet.filter(t => t.type === typeKey).length + 1;
+        // Named like the default fleet, with the lowest number not in use.
+        const taken = new Set(p2State.fleet.map(t => t.name));
+        let count = 1;
+        while (taken.has(`${tdef.shortName} ${count} 號`)) count++;
         const newTrain = {
           id: 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-          name: `${tdef.name} ${count} 號`,
+          name: `${tdef.shortName} ${count} 號`,
           type: typeKey,
         };
         p2State.fleet.push(newTrain);
