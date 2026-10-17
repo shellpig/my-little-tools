@@ -574,18 +574,30 @@ function signTexture(text, bg, fg) {
   const c = document.createElement('canvas');
   c.width = 512;
   c.height = 128;
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  t.userData.sign = { bg, fg };
+  drawSign(t, text);
+  return t;
+}
+
+// Draws (or redraws, for a renamed building) a sign's text on its own
+// canvas, shrinking long names to fit.
+function drawSign(tex, text) {
+  const { bg, fg } = tex.userData.sign;
+  const c = tex.image;
   const ctx = c.getContext('2d');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, c.width, c.height);
   ctx.fillStyle = fg;
-  ctx.font = '900 88px "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif';
+  const font = size => `900 ${size}px "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif`;
+  ctx.font = font(88);
+  ctx.font = font(Math.min(88, Math.floor(88 * 480 / ctx.measureText(text).width)));
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, 256, 68);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
-  return t;
+  tex.needsUpdate = true;
 }
 
 // Awning and sign are built facing +z in a group set on the shop's front
@@ -760,6 +772,7 @@ function buildStation(commercial) {
       places: [PLACES.get(STATION.name)],
       points: [STATION_DOOR],
     });
+    nameable(item, STATION.name);
     if (LEVEL.atrain) {
       const b = new THREE.Box3().setFromObject(item.pivot);
       stationVoice = { obj: item.pivot, bubbleY: b.max.y - b.min.y + 0.1 };
@@ -1038,7 +1051,7 @@ async function buildTown() {
   if (HOTEL) {
     jobs.push(place('commercial', HOTEL.model, { x: 0, mat: paletteMaterial(commercial, 0.6, 0.5, 0.3) }).then(obj => {
       const c = collect(() => decorateHotel(solidOf(alignFront(obj))));
-      editable('hotel', [obj, ...c.parts], { ...c, points: [HOTEL_DOOR] });
+      nameable(editable('hotel', [obj, ...c.parts], { ...c, points: [HOTEL_DOOR] }), HOTEL.name);
     }));
   }
   if (STATION) jobs.push(buildStation(commercial));
@@ -1050,9 +1063,9 @@ async function buildTown() {
     const mat = paletteMaterial(commercial, shop.glow, shop.closes);
     jobs.push(building('commercial', shop.model, shop.x, shop, mat).then(obj => {
       const c = collect(() => decorateShop(obj, shop));
-      paintable(editable(`shop:${shop.name}`, [obj, ...c.parts], {
+      nameable(paintable(editable(`shop:${shop.name}`, [obj, ...c.parts], {
         solids: [obj.userData.solid], places: [PLACES.get(shop.name)], points: shop.name === '便利商店' && storeDoor ? [storeDoor] : [],
-      }), mat, false);
+      }), mat, false), shop.name);
     }));
   }
 
@@ -3434,7 +3447,7 @@ function talkStation() {
   const line = p2State.ledger.length
     ? `昨日乘客 ${p2State.ledger[p2State.ledger.length - 1].riders} 人`
     : '昨日乘客 —（還沒有結算）';
-  talk(stationVoice, { name: STATION.name, role: '車站', line });
+  talk(stationVoice, { name: displayName(editables.get('station')), role: '車站', line });
 }
 
 function aim(e) {
@@ -4044,7 +4057,25 @@ function editable(id, parts, { solids: ss = [], posts: ps = [], places = [], poi
 }
 
 const stateOf = item => ({ x: item.pivot.position.x, z: item.pivot.position.z, rot: item.pivot.rotation.y, removed: item.removed,
-  ...(item.paint && { paint: item.paint }) });
+  ...(item.paint && { paint: item.paint }), ...(item.name && { name: item.name }) });
+
+// Shops, the hotel and the station can be renamed: `name` is what their signs
+// show, while the name they were built with stays their key for places,
+// residents' plans and bus riders. None is the built name.
+function nameable(item, name) {
+  const signs = new Set();
+  item.pivot.traverse(o => { if (o.material?.map?.userData.sign) signs.add(o.material.map); });
+  item.nameable = { original: name, signs: [...signs] };
+  return item;
+}
+
+function applyName(item, name) {
+  if (name === item.name) return;
+  item.name = name;
+  for (const tex of item.nameable.signs) drawSign(tex, displayName(item));
+}
+
+const displayName = item => item.name ?? item.nameable.original;
 
 // Houses, shops and villas can be repainted: `paint` is { wall } on the
 // commercial palette or { wall, roof } on a villa's; none is how it was built.
@@ -4062,8 +4093,9 @@ function applyPaint(item, paint) {
 }
 
 // Put an item where `state` says and bring everything that hangs off it along.
-function applyState(item, { x, z, rot, removed, paint }) {
+function applyState(item, { x, z, rot, removed, paint, name }) {
   if (item.paintable) applyPaint(item, paint);
+  if (item.nameable) applyName(item, name);
   item.pivot.position.set(x, 0, z);
   item.pivot.rotation.y = rot;
   item.pivot.updateMatrixWorld(true);
@@ -4205,7 +4237,7 @@ function currentLayout() {
     // Added things are kept with how to build them again, unless removed.
     if (item.add) {
       if (!s.removed && item !== placing) layout[item.id] = { ...s, add: item.add };
-    } else if (s.removed || s.paint || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) {
+    } else if (s.removed || s.paint || s.name || s.x !== item.base.x || s.z !== item.base.z || s.rot !== item.base.rot) {
       layout[item.id] = s;
     }
   }
@@ -4273,16 +4305,20 @@ function select(item) {
 // (not while the add panel is open).
 function renderPaintPanel() {
   const item = selected;
-  const show = !!item?.paintable && editing && !placing && $('add-panel').hidden;
+  const show = !!(item?.paintable || item?.nameable) && editing && !placing && $('add-panel').hidden;
   $('paint-panel').hidden = !show;
   if (!show) return;
+  $('name-box').hidden = !item.nameable;
+  if (item.nameable) $('paint-name').value = displayName(item);
+  $('paint-wall-box').hidden = !item.paintable;
+  $('paint-roof-box').hidden = !item.paintable?.villa;
+  if (!item.paintable) return;
   const { villa } = item.paintable;
   const now = currentPaint(item);
   const paint = next => () => change(item, { ...stateOf(item), paint: { ...now, ...next } });
   $('paint-walls').replaceChildren(...(villa
     ? VILLA_WALLS.map(([label], i) => chip(label, now.wall === i, paint({ wall: i })))
     : WALLS.map(([label, w]) => chip(label, now.wall === w, paint({ wall: w })))));
-  $('paint-roof-box').hidden = !villa;
   $('paint-roofs').replaceChildren(...VILLA_ROOFS.map(([label], i) => chip(label, now.roof === i, paint({ roof: i }))));
 }
 
@@ -4543,6 +4579,7 @@ async function buildAdded(id, add) {
     const parts = [obj, ...c.parts];
     item = editable(id, parts, { solids: [obj.userData.solid], places: [frontDoor(parts)] });
     paintable(item, mat, villa);
+    if (add.type === 'shop') nameable(item, add.name);
   }
   item.add = add;
   return item;
@@ -4725,6 +4762,21 @@ $('add-close').addEventListener('click', () => {
   renderPaintPanel();
 });
 $('paint-close').addEventListener('click', () => select(null));
+// The name applies on Enter or on leaving the box, to the building selected
+// when typing began; empty or the built name goes back to the built name.
+let naming = null;
+$('paint-name').addEventListener('focus', () => { naming = selected; });
+$('paint-name').addEventListener('change', e => {
+  const item = naming;
+  if (!item?.nameable || item.removed) return;
+  const text = e.target.value.trim();
+  const name = text && text !== item.nameable.original ? text : undefined;
+  if (name !== item.name) change(item, { ...stateOf(item), name });
+  else if (selected === item) e.target.value = displayName(item);
+});
+$('paint-name').addEventListener('keydown', e => {
+  if (e.code === 'Enter') e.target.blur();
+});
 renderer.domElement.addEventListener('contextmenu', e => { if (placing) e.preventDefault(); });
 
 // ---------- paving ----------
@@ -6352,7 +6404,7 @@ function setupOpsPanel() {
             cell.classList.add('error');
             cell.title = `⚠️ ${err}`;
           } else {
-            cell.title = `${trainName}（${trip.stop ? '停靠晴川站' : '通過不停'}）`;
+            cell.title = `${trainName}（${trip.stop ? `停靠${displayName(editables.get('station'))}` : '通過不停'}）`;
           }
           cell.addEventListener('dragstart', e => {
             dragSource = {
