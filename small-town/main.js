@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -879,13 +880,58 @@ function onPath(x, z) {
 // Filled in by buildPark for the wishing fountain.
 const fountain = {};
 
-// A tree of either size, turned and scaled at random, that the editor can move.
+// The suburban pack's two trees and the Nature Kit's broadleaf ones. The
+// Nature trees come fully metallic in teal; they are drawn matte in the
+// town's own tree colours (sampled from the suburban palette) and shrunk
+// to about the suburban trees' height. Their leaf and wood parts are merged
+// into one vertex-coloured mesh, so each tree stays one draw call.
+const NATURE_TREES = ['default', 'oak', 'fat', 'tall', 'thin', 'simple', 'small', 'detailed', 'blocks', 'plateau', 'cone']
+  .map(k => `tree_${k}`);
+const TREES = ['tree-large', 'tree-small', ...NATURE_TREES];
+const NATURE_TREE_SCALE = 0.45;
+const TREE_LEAF = new THREE.Color('#2a9370');
+const TREE_WOOD = new THREE.Color('#b66545');
+const isNatureTree = model => model.startsWith('tree_');
+
+const natureTrees = new Map();
+function natureTree(name) {
+  if (!natureTrees.has(name)) {
+    natureTrees.set(name, model('nature', name).then(gltf => {
+      gltf.scene.updateMatrixWorld(true);
+      const parts = [];
+      gltf.scene.traverse(o => {
+        if (!o.isMesh) return;
+        const geo = o.geometry.clone().applyMatrix4(o.matrixWorld);
+        const [r, g, b] = (o.material.name.startsWith('leafs') ? TREE_LEAF : TREE_WOOD).toArray();
+        const colors = new Float32Array(geo.attributes.position.count * 3);
+        for (let i = 0; i < colors.length; i += 3) colors.set([r, g, b], i);
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        parts.push(geo);
+      });
+      return mergeGeometries(parts);
+    }));
+  }
+  return natureTrees.get(name);
+}
+
+async function placeTree(name, { x = 0, z = 0, rot = 0, scale }, plantMat) {
+  if (!isNatureTree(name)) return place('suburban', name, { x, z, rot, scale, mat: plantMat });
+  const tree = new THREE.Mesh(await natureTree(name), kit.treeMat);
+  tree.castShadow = tree.receiveShadow = true;
+  tree.position.set(x, 0, z);
+  tree.rotation.y = rot;
+  tree.scale.setScalar(scale * NATURE_TREE_SCALE);
+  scene.add(tree);
+  return tree;
+}
+
+// A tree of any kind, turned and scaled at random, that the editor can move.
 let trees = 0;
 function plantTree(x, z, plantMat) {
   const id = `tree:${trees++}`;
   const c = collect(() => post(x, z, 0.1));
-  return place('suburban', rand() < 0.5 ? 'tree-large' : 'tree-small',
-    { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5, mat: plantMat }).then(obj => editable(id, [obj], c));
+  return placeTree(TREES[Math.floor(rand() * TREES.length)],
+    { x, z, rot: rand() * 6, scale: 1 + rand() * 0.5 }, plantMat).then(obj => editable(id, [obj], c));
 }
 
 function buildPark(jobs, plantMat) {
@@ -1023,6 +1069,72 @@ async function initRail() {
   });
 }
 
+// The grass, mottled rather than one flat green: irregular patches with
+// soft edges, a shade lighter or darker, and here and there bare earthy
+// ground; plus faint shade under the trees. The patches come from smooth
+// value noise worked out on a coarse grid and scaled up, so they have no
+// hard outlines. Laid over the map's bounds (`x0`, `z0` its corner, `w` × `d`).
+function grassTexture({ x0, z0, w, d }) {
+  const N = 512;
+  const S = 2048;
+  const lattice = (seed, i, j) => {
+    const h = Math.sin(i * 127.1 + j * 311.7 + seed * 74.7) * 43758.5453;
+    return h - Math.floor(h);
+  };
+  const smooth = t => t * t * (3 - 2 * t);
+  const noise = (seed, x, y) => {
+    const i = Math.floor(x), j = Math.floor(y), fx = smooth(x - i), fy = smooth(y - j);
+    const a = lattice(seed, i, j), b = lattice(seed, i + 1, j);
+    const c = lattice(seed, i, j + 1), e = lattice(seed, i + 1, j + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + e) * fx * fy;
+  };
+  // A few octaves, so the patch outlines wander instead of rounding off.
+  const fbm = (seed, x, y) => (noise(seed, x, y) * 0.55 + noise(seed + 1, x * 2.1, y * 2.1) * 0.3
+    + noise(seed + 2, x * 4.3, y * 4.3) * 0.15);
+  const ramp = (a, b, v) => smooth(Math.min(Math.max((v - a) / (b - a), 0), 1));
+  const BASE = [102, 122, 82];
+  const LIGHT = [122, 142, 90];
+  const DARK = [84, 104, 68];
+  const EARTH = [158, 142, 92];
+  const mix = (p, q, t) => p.map((v, k) => v + (q[k] - v) * t);
+
+  const small = document.createElement('canvas');
+  small.width = small.height = N;
+  const sctx = small.getContext('2d');
+  const img = sctx.createImageData(N, N);
+  const cycles = w / 9; // patches roughly 4–9 units across
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const u = x / N * cycles, v = y / N * cycles;
+      let col = mix(BASE, LIGHT, ramp(0.5, 0.7, fbm(10, u, v)) * 0.8);
+      col = mix(col, DARK, ramp(0.55, 0.72, fbm(20, u * 1.3, v * 1.3)) * 0.8);
+      col = mix(col, EARTH, ramp(0.66, 0.8, fbm(30, u * 0.9, v * 0.9)) * 0.75);
+      img.data.set([...col, 255], (y * N + x) * 4);
+    }
+  }
+  sctx.putImageData(img, 0, 0);
+
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(small, 0, 0, S, S);
+  const px = S / w; // canvas pixels per world unit
+  for (const t of LEVEL.trees ?? []) {
+    if (!t) continue;
+    const [x, y, radius] = [(t[0] - x0) * px, (t[1] - z0) * px, px * 1.1];
+    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    g.addColorStop(0, 'rgba(62, 82, 50, 0.3)');
+    g.addColorStop(1, 'rgba(62, 82, 50, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
 async function buildTown() {
   const [commercial, suburban, roads] = await Promise.all(['commercial', 'suburban', 'roads'].map(palette));
   // Every building has its own material so its lights go out at its own time.
@@ -1030,7 +1142,8 @@ async function buildTown() {
   const roadMat = paletteMaterial(roads, 0);
   // About one town house in four has pastel walls.
   const pastels = PASTELS.map(p => pastel(commercial, p));
-  Object.assign(kit, { commercial, suburban, pastels, plantMat: houseMat, roadMat });
+  const treeMat = std(0xffffff, { vertexColors: true });
+  Object.assign(kit, { commercial, suburban, pastels, plantMat: houseMat, roadMat, treeMat });
   const townHouseMat = i => paletteMaterial(i % 7 === 2 || i % 7 === 5 ? pastels[i % 3] : commercial,
     [1.4, 0.7, 2.2][Math.floor(rand() * 3)], bedtime(21.5, 2.5), rand() * 0.15);
   const villaMat = () => paletteMaterial(suburban, 0.9 + rand() * 0.6, bedtime(21, 1), rand() * 0.1);
@@ -1039,7 +1152,8 @@ async function buildTown() {
   // Grass over the map's bounds; dark ground beyond, where nothing can be built.
   const [iMin, iMax, jMin, jMax] = LEVEL.bounds;
   box(400, 0.1, 400, std(0x3a3c40), 0, -0.08, 0);
-  box((iMax - iMin + 1) * CELL, 0.1, (jMax - jMin + 1) * CELL, std(0x667a52),
+  const grass = { x0: (iMin - 0.5) * CELL, z0: (jMin - 0.5) * CELL, w: (iMax - iMin + 1) * CELL, d: (jMax - jMin + 1) * CELL };
+  box(grass.w, 0.1, grass.d, std(0xffffff, { map: grassTexture(grass) }),
     (iMin + iMax) / 2 * CELL, -0.049, (jMin + jMax) / 2 * CELL);
   Object.assign(kit, { pavement: std(0xb3ada3), curb: std(0xd2ccc0) });
   paveSidewalks();
@@ -1083,7 +1197,12 @@ async function buildTown() {
 
   // South of the main street: the park, with a gas station and a car park either side.
   if (PARK) buildPark(jobs, houseMat);
-  for (const [x, z] of LEVEL.trees) jobs.push(plantTree(x, z, houseMat));
+  // A level may leave a thinned-out tree as null; it still takes its number,
+  // so saved trees keep theirs.
+  for (const t of LEVEL.trees) {
+    if (t) jobs.push(plantTree(t[0], t[1], houseMat));
+    else trees++;
+  }
   if (GAS) buildGasStation();
   if (LOT) buildParkingLot();
 
@@ -4481,7 +4600,7 @@ const ADD_TYPES = [
   { type: 'villa', label: '別墅', pack: 'suburban', models: [...'abcdefghijklmnopqrstu'].map(c => `building-type-${c}`) },
   { type: 'shop', label: '商店', pack: 'commercial', models: BUILDINGS },
   { type: 'facility', label: '公共設施', atrainOnly: true },
-  { type: 'tree', label: '樹', pack: 'suburban', models: ['tree-large', 'tree-small'] },
+  { type: 'tree', label: '樹', pack: 'suburban', models: TREES },
   { type: 'lamp', label: '路燈', pack: 'roads', models: ['light-square', 'light-curved'] },
   { type: 'paving', label: '道路', models: [] },
 ];
@@ -4561,7 +4680,7 @@ async function buildAdded(id, add) {
     if (isCommercialEarn) paintable(item, mat, false);
   } else if (add.type === 'tree') {
     const c = collect(() => post(0, 0, 0.1));
-    const obj = await place('suburban', add.model, { scale: 1.25, mat: kit.plantMat });
+    const obj = await placeTree(add.model, { scale: 1.25 }, kit.plantMat);
     item = editable(id, [obj], c);
   } else if (add.type === 'lamp') {
     item = await streetLamp(id, 0, 0, 1, add.model);
@@ -4743,7 +4862,9 @@ function renderAddPanel() {
     $('add-models').replaceChildren(...t.models.map(model => {
       const b = document.createElement('button');
       b.title = model;
-      b.innerHTML = `<img src="${ASSETS}/${t.pack}/Previews/${model}.png" alt="">`;
+      // The Nature trees' previews are drawn in the town colours (not shipped).
+      const pack = t.type === 'tree' && isNatureTree(model) ? 'nature' : t.pack;
+      b.innerHTML = `<img src="${ASSETS}/${pack}/Previews/${model}.png" alt="">`;
       b.onclick = () => startPlacing(addFor(t, model));
       return b;
     }));
