@@ -107,6 +107,10 @@ export function createWishes(town) {
   const restingCoins = [];
   let spoutBoost = 0;
   let coins = 0;
+  // The fireworks flash stays in the scene, dark, all the time: adding or
+  // removing a light makes every material recompile, a visible stall.
+  const flash = new THREE.PointLight(0xffffff, 0, 40, 1.2);
+  scene.add(flash);
 
   const coinGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.007, 16);
   // Half metal: with nothing to reflect, full metal reads as dark brown.
@@ -311,8 +315,6 @@ export function createWishes(town) {
       ...once('fireworks'),
       start() {
         const colors = [0xff4d6d, 0xffd166, 0x06d6a0, 0x4cc9f0, 0xb388ff, 0xff9f1c, 0xffffff].map(c => new THREE.Color(c));
-        const flash = new THREE.PointLight(0xffffff, 0, 40, 1.2);
-        scene.add(flash);
         const bursts = [];
         let t = 0;
         let next = 0;
@@ -370,7 +372,7 @@ export function createWishes(town) {
           },
           end() {
             for (const b of bursts) scene.remove(b.points);
-            scene.remove(flash);
+            flash.intensity = 0;
           },
         };
       },

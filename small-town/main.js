@@ -210,6 +210,10 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// The sun's shadow map is redrawn every other frame (see frame()); the
+// lag on moving shadows doesn't show, and it halves the shadow pass.
+renderer.shadowMap.autoUpdate = false;
+let shadowFrame = 0;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 let quality = 'high';
 let weather = null;
@@ -261,6 +265,13 @@ const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, sa
 const composer = new EffectComposer(renderer, target);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.5, 0.82);
+// The glow is soft anyway, so on sharp screens it is worked out at one
+// pixel per CSS pixel rather than per device pixel.
+const bloomSetSize = bloom.setSize.bind(bloom);
+bloom.setSize = (w, h) => {
+  const r = Math.max(1, renderer.getPixelRatio());
+  bloomSetSize(w / r, h / r);
+};
 composer.addPass(bloom);
 
 // Tilt-shift with a sharp band: rows within `band` of the focus line `r`
@@ -5691,6 +5702,7 @@ function frame() {
   controls.update();
   updateUI();
   music.tick(time, speed);
+  renderer.shadowMap.needsUpdate = (shadowFrame++ & 1) === 0;
   if (quality === 'low') renderer.render(scene, camera);
   else composer.render();
   requestAnimationFrame(frame);
@@ -6524,5 +6536,25 @@ addEventListener('keydown', e => {
   else setEditing(false);
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 }, true);
+// Draw everything once behind the loading screen, hidden things and things
+// out of view included, so every shader is compiled now rather than the
+// first time something shows up (snow, a train setting out, ...), which
+// stalls that frame. Lights stay as they are: their count is in the shaders.
+function warmUp() {
+  const hidden = [];
+  const unculled = [];
+  scene.traverse(o => {
+    if (!o.visible && !o.isLight) hidden.push(o);
+    if (o.frustumCulled) unculled.push(o);
+  });
+  hidden.forEach(o => { o.visible = true; });
+  unculled.forEach(o => { o.frustumCulled = false; });
+  renderer.shadowMap.needsUpdate = true;
+  if (quality === 'low') renderer.render(scene, camera);
+  else composer.render();
+  hidden.forEach(o => { o.visible = false; });
+  unculled.forEach(o => { o.frustumCulled = true; });
+}
+warmUp();
 $('loading').classList.add('done');
 frame();
