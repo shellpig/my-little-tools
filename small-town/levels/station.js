@@ -116,7 +116,15 @@ const trees = (() => {
     if (out.some(([tx, tz]) => (tx - x) ** 2 + (tz - z) ** 2 < 1.1)) continue;
     out.push([+x.toFixed(2), +z.toFixed(2)]);
   }
-  return out;
+  // 鐵道與鎮中心附近再疏掉約三成。用位置雜湊而不是 rnd()，其餘的樹位置不變；
+  // 疏掉的留 null 佔位，樹的編號（存檔用）不會錯開。
+  const near = (x, z) => Math.abs(z - 6.4) < 7
+    || Math.hypot(Math.max(CORE[0] - x, 0, x - CORE[1]), Math.max(CORE[2] - z, 0, z - CORE[3])) < 8;
+  const hash = (x, z) => {
+    const h = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+    return h - Math.floor(h);
+  };
+  return out.map(([x, z]) => (near(x, z) && hash(x, z) < 0.3 ? null : [x, z]));
 })();
 
 const railCells = [];
