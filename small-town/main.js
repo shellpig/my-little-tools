@@ -48,6 +48,9 @@ const PERSON_SCALE = 0.32;
 // Street cross-section along z: two lanes, each as wide as a sidewalk.
 const LANE = 0.8;
 const ROAD_HALF = LANE;
+// The road pieces pave asphalt only across the middle 0.6 of a cell (gutters
+// beyond), so cars keep to the middle of their half of that.
+const DRIVE = 0.3 * ROAD_HALF;
 const SIDEWALK = 0.8;
 const FRONTAGE = ROAD_HALF + SIDEWALK; // where building fronts and the park start
 const CELL = ROAD_HALF * 2;
@@ -707,6 +710,15 @@ function decorateStation(building, station) {
     }
     box(platWidth - 0.4, 0.025, platDepth - 0.3, std(0x3a3d44, { roughness: 0.7 }), station.x, 0.58, platZ, true, parent);
     box(platWidth - 1.0, 0.006, 0.15, downlight, station.x, 0.565, platZ, false, parent);
+    // At night a small light under each end of the roof: short reach, so it
+    // lights the platform below without spilling past the roof.
+    for (const dx of [-1, 1]) {
+      const light = new THREE.PointLight(0xfff0d0, 0, 1.1, 1.6);
+      light.position.set(station.x + dx, 0.52, platZ);
+      light.userData.strength = 0.3;
+      parent.add(light);
+      lamps.push(light);
+    }
 
     const signZ = platZ + outward * 0.15;
     box(0.8, 0.18, 0.02, signMat, station.x, 0.42, signZ, false, parent);
@@ -2110,8 +2122,8 @@ function pathThrough(node, from, to) {
   const [dx, dz] = dirOf(opposite(from));
   const [ex, ez] = dirOf(to);
   const reach = (x, z) => Math.abs(x) * node.hx + Math.abs(z) * node.hz;
-  const a = new THREE.Vector3(node.x - dx * reach(dx, dz) - dz * LANE / 2, 0.02, node.z - dz * reach(dx, dz) + dx * LANE / 2);
-  const b = new THREE.Vector3(node.x + ex * reach(ex, ez) - ez * LANE / 2, 0.02, node.z + ez * reach(ex, ez) + ex * LANE / 2);
+  const a = new THREE.Vector3(node.x - dx * reach(dx, dz) - dz * DRIVE, 0.02, node.z - dz * reach(dx, dz) + dx * DRIVE);
+  const b = new THREE.Vector3(node.x + ex * reach(ex, ez) - ez * DRIVE, 0.02, node.z + ez * reach(ex, ez) + ex * DRIVE);
   let curve;
   if (to === opposite(from)) {
     curve = new THREE.LineCurve3(a, b);
@@ -2433,7 +2445,7 @@ function unloadBus(bus) {
   if (!peopleGltfs.length) return;
   // The door sits ahead of the middle, on the travel-right curb side.
   const side = new THREE.Vector3(-bus.heading.z, 0, bus.heading.x);
-  const door = bus.pos.clone().addScaledVector(bus.heading, BUS_LENGTH / 2 - 0.22).addScaledVector(side, ROAD_HALF + 0.06 - LANE / 2);
+  const door = bus.pos.clone().addScaledVector(bus.heading, BUS_LENGTH / 2 - 0.22).addScaledVector(side, ROAD_HALF + 0.06 - DRIVE);
   door.y = 0.05;
   const pick = () => peopleGltfs[Math.floor(Math.random() * peopleGltfs.length)];
   const late = activity(time) < 0.15;
@@ -2719,7 +2731,7 @@ function applyTime(t) {
     mat.emissiveIntensity = glow * night * on + (mat.userData.boost ?? 0);
   }
   for (const l of lamps) {
-    l.intensity = 2.2 * night;
+    l.intensity = 2.2 * night * (l.userData.strength ?? 1);
     l.visible = quality === 'high';
   }
   bloom.strength = 0.2 + 0.6 * night;
