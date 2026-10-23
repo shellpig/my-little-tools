@@ -13,6 +13,8 @@ local function unbind(...)
 end
 
 local is_image = false
+local is_video = false
+local eof_time = nil -- when the current video reached its last frame
 local crop_active = false -- set by crop.lua, which owns the left button then
 local pan = nil -- drag start: mouse position and pan values
 local panning_bound = false
@@ -59,9 +61,24 @@ mp.observe_property("user-data/crop/active", "bool", function(_, active)
     update_pan()
 end)
 
+-- A finished video stays on its last frame without pausing (keep-open-pause=no),
+-- so play/pause there flips pause on: restart from the beginning instead.
+-- Presses within a second of the end are ignored.
+mp.observe_property("eof-reached", "bool", function(_, eof)
+    eof_time = eof and mp.get_time() or nil
+end)
+
+mp.observe_property("pause", "bool", function(_, paused)
+    if not (paused and is_video and eof_time) then return end
+    if mp.get_time() - eof_time >= 1 then
+        mp.commandv("seek", "0", "absolute")
+    end
+    mp.set_property_bool("pause", false)
+end)
+
 local function update()
     local v = mp.get_property_native("current-tracks/video")
-    local is_video = v and not v.image
+    is_video = v and not v.image or false
     is_image = v and v.image and not v.albumart or false
     mp.set_property_native("window-dragging", not is_image and default_window_dragging)
 
