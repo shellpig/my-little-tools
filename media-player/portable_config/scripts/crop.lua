@@ -716,7 +716,8 @@ local function save_crop()
         capture_stderr = true,
     })
 
-    if res and res.status == 0 and not res.error_string then
+    -- error_string is "" on success, so only the exit status tells.
+    if res and res.status == 0 then
         leave_crop_mode()
         mp.osd_message("已存：" .. out_name, 3)
     else
