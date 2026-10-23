@@ -3,5 +3,6 @@
 media-player/*
 !media-player/portable_config/
 !media-player/README.md
+!media-player/setup.ps1
 media-player/portable_config/watch_later/
 media-player/portable_config/cache/
