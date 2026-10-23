@@ -750,6 +750,7 @@ local BINDINGS = {
 leave_crop_mode = function()
     if not state.active then return end
     state.active = false
+    mp.set_property_native("user-data/crop/active", false) -- lets keys.lua pan again
     state.drag = nil
     state.hover = nil
     state.rect = nil
@@ -780,6 +781,7 @@ local function enter_crop_mode()
     end
 
     state.active = true
+    mp.set_property_native("user-data/crop/active", true) -- keys.lua stops panning
     state.img_w = dwidth
     state.img_h = dheight
     state.rect = nil
