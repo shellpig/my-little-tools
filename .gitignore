@@ -1,1 +1,7 @@
 .venv/
+# media-player: binaries are downloaded, only config and scripts are tracked
+media-player/*
+!media-player/portable_config/
+!media-player/README.md
+media-player/portable_config/watch_later/
+media-player/portable_config/cache/
