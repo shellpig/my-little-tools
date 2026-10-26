@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .bilibili import BiliBiliIE
 from .core import (
     build_cookies_from_browser,
     build_format_selector,
@@ -48,6 +49,7 @@ class MediaBackend:
             return media_info_from_ydl(fetch_threads_info(url))
         yt_dlp = _import_yt_dlp()
         with yt_dlp.YoutubeDL(self._base_options(cookies_browser, cookies_file)) as ydl:
+            ydl.add_info_extractor(BiliBiliIE())
             info = ydl.extract_info(url, download=False)
         if not isinstance(info, dict):
             raise RuntimeError("無法取得影片資訊。")
@@ -103,6 +105,7 @@ class MediaBackend:
 
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.add_info_extractor(BiliBiliIE())
                 if threads_info is not None:
                     info = ydl.process_ie_result(threads_info, download=True)
                 else:
