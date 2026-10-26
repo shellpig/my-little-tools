@@ -246,6 +246,8 @@ camera.position.set(...LEVEL.camera.position);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
 controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+controls.touches.ONE = THREE.TOUCH.PAN;
+controls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE;
 controls.target.set(...LEVEL.camera.target);
 controls.enableDamping = true;
 controls.maxPolarAngle = 1.32;
