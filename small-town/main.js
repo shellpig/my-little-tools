@@ -255,7 +255,9 @@ controls.maxDistance = VIEW.maxDistance;
 const sun = new THREE.DirectionalLight(0xffffff, 2);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
-Object.assign(sun.shadow.camera, { left: -VIEW.shadow, right: VIEW.shadow, top: VIEW.shadow, bottom: -VIEW.shadow, near: 1, far: 80 });
+// Far enough back that the shadow box's depth spans the whole map at low sun.
+const SUN_DIST = Math.max(30, VIEW.shadow * 1.5);
+Object.assign(sun.shadow.camera, { left: -VIEW.shadow, right: VIEW.shadow, top: VIEW.shadow, bottom: -VIEW.shadow, near: 1, far: Math.max(80, SUN_DIST + VIEW.shadow * 1.5) });
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.01;
 scene.add(sun, sun.target);
@@ -2848,7 +2850,7 @@ function applyTime(t) {
   sun.intensity = 0.45 + 2.55 * smooth(elevation, 0, 0.3);
   sun.color.lerp(MOON, night);
   lightDir.set(Math.cos(angle), Math.max(elevation, 0.12), 0.6).lerp(MOON_DIR, night);
-  sun.position.copy(lightDir.normalize().multiplyScalar(30));
+  sun.position.copy(lightDir.normalize().multiplyScalar(SUN_DIST));
 
   hemi.intensity = 0.3 + 0.7 * day;
   hemi.color.setHex(0x3c4a7a).lerp(new THREE.Color(0xcfe2ff), day);

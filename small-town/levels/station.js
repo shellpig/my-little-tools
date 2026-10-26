@@ -190,6 +190,6 @@ export default {
   },
   camera: { target: [0, 0.2, 3], position: [4, 12, 18.2] },
   // 模擬城市式玩法：鏡頭可以拉遠看整張地圖，霧淡、陰影範圍蓋住整張地圖。
-  view: { maxDistance: 140, fog: [100, 260], shadow: 48 },
+  view: { maxDistance: 140, fog: [100, 260], shadow: 70 },
   trees,
 };
