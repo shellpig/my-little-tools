@@ -14,4 +14,8 @@ class BiliBiliIE(BaseBiliBiliIE):
         parsed = urlsplit(url)
         if parsed.path.startswith("/video/"):
             url = urlunsplit(parsed._replace(path="/zh-Hans" + parsed.path))
-        return super()._real_extract(url)
+        info = super()._real_extract(url)
+        # Some Bilibili CDNs reject requests without a bounded byte range (HTTP 567).
+        for fmt in info.get("formats", []):
+            fmt.setdefault("downloader_options", {})["http_chunk_size"] = 1024 * 1024
+        return info

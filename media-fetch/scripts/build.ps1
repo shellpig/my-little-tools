@@ -22,16 +22,23 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 .\.venv\Scripts\python.exe -m ruff check src tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-.\.venv\Scripts\python.exe -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --onefile `
-    --windowed `
-    --name MediaFetch `
-    --paths src `
-    --collect-binaries imageio_ffmpeg `
-    --add-binary "vendor\deno.exe;." `
-    src\media_fetch\__main__.py
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Prefer Windows DLLs over unrelated tools' DLLs (for example Poppler's ICU).
+$MediaFetchBuildPath = $env:PATH
+try {
+    $env:PATH = "$env:SystemRoot\System32;$MediaFetchBuildPath"
+    .\.venv\Scripts\python.exe -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --onefile `
+        --windowed `
+        --name MediaFetch `
+        --paths src `
+        --collect-binaries imageio_ffmpeg `
+        --add-binary "vendor\deno.exe;." `
+        src\media_fetch\__main__.py
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    $env:PATH = $MediaFetchBuildPath
+}
 
 Write-Host "Build complete: $ToolRoot\dist\MediaFetch.exe"
