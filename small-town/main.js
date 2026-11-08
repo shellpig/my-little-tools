@@ -17,6 +17,7 @@ import { HALF, buildWalkGrid, snapCandidates, astar } from './nav.js';
 import { buildRail, RAIL_TOP } from './rail.js';
 import { createMusicPlayer } from './music.js';
 import { createTrainSounds } from './train-sounds.js';
+import { createVintageSedan } from './vintage-sedan.js';
 import {
   TRAIN_TYPES, isValidTrainType, DEFAULT_FLEET, DEFAULT_TIMETABLE,
   BUS_PRICE, BUS_MAX, BUS_COLORS, BUS_HEADWAY, FACILITIES,
@@ -2122,7 +2123,7 @@ async function addPeople() {
 // and turns back at a dead end. Only one car is in a junction at a time. Cars
 // come in out of the fog at the map's edge cells and leave past them. The bus
 // runs its level route, stopping at the stop cell.
-const CARS = ['sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv',
+const CARS = ['vintage-sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv',
   'van', 'hatchback-sports', 'sedan', 'truck'];
 const PARKED = ['sedan', 'suv', 'van', 'taxi', 'hatchback-sports', 'sedan', 'suv'];
 const CAR_SCALE = 0.2;
@@ -2422,8 +2423,10 @@ class Vehicle {
     if (blocked) brake((seg.curve.len - this.s - this.length / 2 - 0.05) * 1.2);
 
     this.speed += THREE.MathUtils.clamp(target - this.speed, -1.5 * dt, 0.5 * dt);
+    const previousS = this.s;
     this.s += this.speed * dt;
     if (blocked) this.s = Math.min(this.s, seg.curve.len - 1e-3);
+    this.obj.userData.rollWheels?.(Math.max(0, this.s - previousS));
     while (this.s >= this.path[0].curve.len) {
       const done = this.path.shift();
       this.s -= done.curve.len;
@@ -2617,6 +2620,23 @@ function makeCar(gltf, headMat, tailMat) {
   return { group, length: half * 2 };
 }
 
+function makeVintageCar() {
+  const group = createVintageSedan({ compact: true });
+  group.scale.setScalar(0.1);
+  clipToMap(group);
+  group.traverse(part => { if (part.isLine) clipMat(part.material); });
+  const { headlightMaterial, taillightMaterial } = group.userData;
+  glowing.push([headlightMaterial, 4], [taillightMaterial, 2.5]);
+  const beam = new THREE.SpotLight(0xffefcf, 0, 3.1, 0.29, 0.72);
+  beam.position.set(0, 1.28, 2.26);
+  beam.target.position.set(0, 0, 19);
+  beam.userData.strength = 1.55;
+  group.add(beam, beam.target);
+  lamps.push(beam);
+  const bounds = new THREE.Box3().setFromObject(group);
+  return { group, length: bounds.max.z - bounds.min.z };
+}
+
 // The city bus: green lower body, a window band lit from inside at night,
 // white roof, front door on the curb (−x) side and four Car Kit wheels.
 function makeBus(wheel, headMat, tailMat, color = 'green') {
@@ -2694,12 +2714,16 @@ async function addTraffic() {
   glowing.push([headMat, 4], [tailMat, 2.5]);
   clipMat(headMat);
   clipMat(tailMat);
-  const [wheel, ...cars] = await Promise.all(['wheel-default', ...CARS].map(n => model('car-kit', n)));
+  const [wheel, ...cars] = await Promise.all([
+    model('car-kit', 'wheel-default'),
+    ...CARS.map(async name => name === 'vintage-sedan'
+      ? makeVintageCar()
+      : makeCar(await model('car-kit', name), headMat, tailMat)),
+  ]);
   busWheel = wheel;
   busHeadMat = headMat;
   busTailMat = tailMat;
-  cars.forEach((gltf, i) => {
-    const { group, length } = makeCar(gltf, headMat, tailMat);
+  cars.forEach(({ group, length }, i) => {
     vehicles.push(new Vehicle(group, length, 0.9 + rand() * 0.35, i / cars.length));
   });
   if (LEVEL.bus) {
