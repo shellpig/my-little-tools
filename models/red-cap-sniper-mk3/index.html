@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>紅帽鬍子狙擊手・MK3 實體修復</title>
+<script>if (new URLSearchParams(location.search).has('capture')) document.documentElement.classList.add('capture');</script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #242327; color: #eee8e3; font: 15px system-ui, sans-serif; }
+  main { max-width: 1060px; margin: auto; padding: 18px; }
+  h1 { margin: 0 0 10px; font-size: 1.45rem; }
+  a { color: #f0b9ad; }
+  p { margin: 8px 0; color: #d8cfc9; }
+  [data-figure-stage] { height: clamp(360px, 72vh, 760px); background: #686569; border-radius: 8px; overflow: hidden; }
+  canvas { display: block; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0 2px; }
+  button { font: inherit; color: inherit; border: 1px solid #756869; background: #373137; border-radius: 5px; padding: 7px 11px; cursor: pointer; }
+  button[aria-pressed="true"] { background: #914c42; border-color: #d48c79; }
+  output { color: #d6c8bd; }
+  .capture main { max-width: none; padding: 0; }
+  .capture [data-figure-stage] { width: 100vw; height: 100vh; border-radius: 0; }
+  .capture h1, .capture p, .capture nav { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>紅帽鬍子狙擊手・MK3 實體修復</h1>
+  <div data-figure-stage aria-label="可拖曳旋轉與縮放的狙擊手 3D 模型"></div>
+  <nav aria-label="模型視角">
+    <button type="button" data-view="hero" aria-pressed="true">主視角</button>
+    <button type="button" data-view="front" aria-pressed="false">正面</button>
+    <button type="button" data-view="right" aria-pressed="false">右側</button>
+    <button type="button" data-view="rear" aria-pressed="false">背面</button>
+    <button type="button" data-view="left" aria-pressed="false">左側</button>
+    <button type="button" data-view="overhead" aria-pressed="false">俯視</button>
+    <button type="button" data-view="portrait" aria-pressed="false">臉部</button>
+    <button type="button" data-clay aria-pressed="false">灰模</button>
+    <button type="button" data-split aria-pressed="false">拆件</button>
+    <output aria-live="polite">點選零件可查看名稱</output>
+  </nav>
+  <p>拖曳旋轉。使用滑鼠滾輪或雙指縮放。 <a href="red-cap-marksman.glb" download>下載 GLB</a> · <a href="before-after.png">查看 MK3 修復前後</a></p>
+</main>
+<script src="preview-runtime.js"></script>
+</body>
+</html>
+
+
+
