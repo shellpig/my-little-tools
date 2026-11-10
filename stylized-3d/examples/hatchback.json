@@ -1,0 +1,6 @@
+{
+  "category": "vehicle",
+  "name": "藍色掀背車",
+  "bodyType": "hatchback",
+  "colors": { "body": "#5a8fd6", "secondary": null, "roof": "#f2f0ea" }
+}

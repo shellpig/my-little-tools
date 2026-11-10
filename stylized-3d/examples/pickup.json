@@ -1,0 +1,7 @@
+{
+  "category": "vehicle",
+  "name": "綠色小貨卡",
+  "bodyType": "pickup",
+  "colors": { "body": "#61cb8b", "secondary": null, "roof": null },
+  "features": ["open-bed"]
+}

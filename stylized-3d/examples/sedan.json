@@ -1,0 +1,11 @@
+{
+  "category": "vehicle",
+  "name": "紅色轎車",
+  "bodyType": "sedan",
+  "proportions": { "lengthToWidth": 2.6, "heightToWidth": 0.85, "hoodRatio": 0.28, "cabinRatio": 0.45, "rearRatio": 0.27 },
+  "colors": { "body": "#c0392b", "secondary": "#f2f0ea", "roof": null },
+  "wheels": { "axles": 2, "sizeClass": "normal" },
+  "windows": { "sidePanels": 2, "rear": true },
+  "features": ["stripe"],
+  "unsupported": [{ "feature": "車頂衝浪板", "note": "沒有對應零件" }]
+}

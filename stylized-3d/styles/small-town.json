@@ -1,0 +1,28 @@
+{
+  "name": "small-town",
+  "envelope": {
+    "width": 1.5,
+    "length": [2.5, 3.4],
+    "height": [1.1, 1.8],
+    "busLength": [5.0, 6.5],
+    "busWidth": 1.6,
+    "busHeight": [1.9, 2.2]
+  },
+  "bevel": 0.1,
+  "wheel": { "radius": 0.30, "width": 0.35, "inset": 0.05, "largeRadius": 0.36, "flush": 0.015, "segments": 16 },
+  "material": { "roughness": 0.9, "metalness": 0, "flatShading": true },
+  "snapColors": true,
+  "cabinMin": { "sedan": 0.48, "hatchback": 0.62, "suv": 0.62, "pickup": 0.32, "van": 0.8 },
+  "gradient": { "top": 1.0, "bottom": 0.8 },
+  "palette": {
+    "body": ["#de433e", "#e74e3e", "#ff7e44", "#ffc044", "#ffc214", "#61cb8b", "#3da679", "#61c8af",
+             "#6895d9", "#4e6dcd", "#a878e8", "#ff8aae", "#ffffff", "#dcdce9", "#868ba1", "#4f5260", "#38383d", "#b06041"],
+    "window": "#d0e8ff",
+    "skirt": "#4f5260",
+    "tire": "#38383d",
+    "hub": "#868ba1",
+    "headlight": "#ffc044",
+    "taillight": "#de433e"
+  },
+  "detail": { "maxTriangles": 3000 }
+}

@@ -1,0 +1,7 @@
+{
+  "category": "vehicle",
+  "name": "黃色計程車",
+  "bodyType": "sedan",
+  "colors": { "body": "#f5b800", "secondary": "#ffffff", "roof": null },
+  "features": ["roof-sign"]
+}

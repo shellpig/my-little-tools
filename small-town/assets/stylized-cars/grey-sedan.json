@@ -1,0 +1,11 @@
+{ "category": "vehicle", "name": "灰藍色四門轎車", "bodyType": "sedan",
+  "proportions": { "lengthToWidth": 2.7, "heightToWidth": 0.7, "hoodRatio": 0.33, "cabinRatio": 0.37, "rearRatio": 0.30 },
+  "colors": { "body": "#7d8a92", "secondary": null, "roof": null },
+  "wheels": { "axles": 2, "sizeClass": "normal" },
+  "windows": { "sidePanels": 2, "rear": true },
+  "features": [],
+  "unsupported": [
+    { "feature": "鍍鉻保險桿與水箱罩", "note": "風格沒有金屬反光材質" },
+    { "feature": "四顆圓形頭燈", "note": "車燈固定為方塊" },
+    { "feature": "白邊輪胎", "note": "輪胎樣式由風格決定" },
+    { "feature": "圓形後視鏡", "note": "沒有後視鏡零件" } ] }

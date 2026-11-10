@@ -1,0 +1,8 @@
+{
+  "category": "vehicle",
+  "name": "市區公車",
+  "bodyType": "bus",
+  "colors": { "body": "#3da679", "secondary": "#ffffff", "roof": "#ffffff" },
+  "wheels": { "axles": 2, "sizeClass": "large" },
+  "windows": { "sidePanels": 6, "rear": true }
+}

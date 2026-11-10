@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "stylized-3d vehicle spec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["category", "bodyType", "colors"],
+  "properties": {
+    "category": { "const": "vehicle" },
+    "name": { "type": "string" },
+    "bodyType": { "enum": ["sedan", "hatchback", "suv", "van", "pickup", "box-truck", "bus"] },
+    "proportions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lengthToWidth": { "type": "number", "minimum": 1.5, "maximum": 8 },
+        "heightToWidth": { "type": "number", "minimum": 0.5, "maximum": 2 },
+        "hoodRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "cabinRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "rearRatio": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body"],
+      "properties": {
+        "body": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "secondary": { "type": ["string", "null"], "pattern": "^#[0-9a-fA-F]{6}$" },
+        "roof": { "type": ["string", "null"], "pattern": "^#[0-9a-fA-F]{6}$" }
+      }
+    },
+    "wheels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "axles": { "enum": [2, 3] },
+        "sizeClass": { "enum": ["normal", "large"] }
+      }
+    },
+    "windows": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sidePanels": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "rear": { "type": "boolean" }
+      }
+    },
+    "features": {
+      "type": "array",
+      "items": { "enum": ["roof-rack", "roof-sign", "spare-wheel", "cargo-box", "open-bed", "stripe"] }
+    },
+    "unsupported": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["feature"],
+        "properties": { "feature": { "type": "string" }, "note": { "type": "string" } }
+      }
+    }
+  }
+}

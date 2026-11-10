@@ -1,0 +1,7 @@
+{
+  "category": "vehicle",
+  "name": "貨運卡車",
+  "bodyType": "box-truck",
+  "colors": { "body": "#ffffff", "secondary": "#61cb8b", "roof": null },
+  "features": ["cargo-box"]
+}
