@@ -1,0 +1,9 @@
+{
+  "name": "stylized-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stylized 3D generator (small-town x vehicle)",
+  "scripts": { "test": "node --test" },
+  "dependencies": { "three": "0.160.0" }
+}

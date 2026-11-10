@@ -1,0 +1,11 @@
+{ "category": "vehicle", "name": "黃色校車", "bodyType": "bus",
+  "proportions": { "lengthToWidth": 4.4, "heightToWidth": 1.25, "hoodRatio": 0.15, "cabinRatio": 0.85, "rearRatio": 0 },
+  "colors": { "body": "#e0a526", "secondary": "#222222", "roof": "#e0a526" },
+  "wheels": { "axles": 2, "sizeClass": "large" },
+  "windows": { "sidePanels": 8, "rear": true },
+  "features": ["stripe"],
+  "unsupported": [
+    { "feature": "SCHOOL BUS 與校區字樣", "note": "不支援文字" },
+    { "feature": "車頂警示燈", "note": "沒有對應零件" },
+    { "feature": "後軸雙輪", "note": "每軸固定一對輪子" },
+    { "feature": "側窗超過 8 片", "note": "sidePanels 上限 8，實際約 10 片" } ] }

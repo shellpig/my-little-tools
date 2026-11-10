@@ -1,0 +1,8 @@
+{
+  "category": "vehicle",
+  "name": "藍色廂型車",
+  "bodyType": "van",
+  "colors": { "body": "#4e6dcd", "secondary": "#ffffff", "roof": null },
+  "windows": { "sidePanels": 3, "rear": true },
+  "features": ["stripe"]
+}

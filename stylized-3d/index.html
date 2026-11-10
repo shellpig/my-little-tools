@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>風格化 3D 生成器</title>
+<style>
+  :root {
+    --bg: #14171f;
+    --panel: #1c2029;
+    --line: rgba(255, 255, 255, .09);
+    --text: #e8ecf3;
+    --dim: #8a93a6;
+    --accent: #ffd27a;
+    --bad: #ff7b7b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif; font-size: 14px; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+  header p { margin: 0; color: var(--dim); }
+  .layout { display: grid; grid-template-columns: 340px 1fr; height: calc(100% - 52px); }
+  aside { overflow-y: auto; padding: 14px 18px 30px; border-right: 1px solid var(--line); background: var(--panel); }
+  main { display: grid; grid-template-rows: minmax(260px, 1fr) auto; min-width: 0; min-height: 0; }
+  #view { position: relative; min-height: 260px; }
+  #view canvas { display: block; width: 100%; height: 100%; }
+  .below { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 14px 18px; border-top: 1px solid var(--line);
+    max-height: 42vh; overflow-y: auto; background: var(--panel); }
+  h2 { margin: 18px 0 8px; font-size: 13px; color: var(--accent); letter-spacing: 1px; }
+  h2:first-child { margin-top: 0; }
+  label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 6px 0; color: var(--dim); }
+  label span:first-child { flex: 0 0 auto; }
+  input[type=text], input[type=number], select, textarea {
+    background: #11141b; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+  input[type=number] { width: 84px; }
+  input[type=text], select { width: 150px; }
+  input[type=color] { width: 44px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+  textarea { width: 100%; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+  .checks label { justify-content: flex-start; color: var(--text); }
+  button { background: #2a3040; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #343c52; }
+  button.primary { background: var(--accent); color: #231c08; border-color: transparent; font-weight: 700; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .errors { color: var(--bad); white-space: pre-wrap; font-size: 12px; margin-top: 6px; }
+  .msg { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  .report h3 { margin: 10px 0 4px; font-size: 12px; color: var(--dim); }
+  .report ul { margin: 0; padding-left: 18px; }
+  .report li { margin: 2px 0; }
+  .dims { font-size: 15px; }
+  .none { color: var(--dim); }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; height: auto; }
+    main { grid-template-rows: 360px auto; }
+    .below { grid-template-columns: 1fr; max-height: none; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>風格化 3D 生成器</h1>
+  <p>小鎮風格 × 載具：填規格，立刻預覽，下載 GLB</p>
+</header>
+<div class="layout">
+  <aside>
+    <h2>基本</h2>
+    <label><span>名稱</span><input type="text" id="name" placeholder="例如：紅色轎車"></label>
+    <label><span>車型</span>
+      <select id="bodyType">
+        <option value="sedan">轎車 sedan</option>
+        <option value="hatchback">掀背車 hatchback</option>
+        <option value="suv">休旅車 suv</option>
+        <option value="van">廂型車 van</option>
+        <option value="pickup">小貨卡 pickup</option>
+        <option value="box-truck">貨車 box-truck</option>
+        <option value="bus">公車 bus</option>
+      </select>
+    </label>
+
+    <h2>比例</h2>
+    <label><span>長寬比 lengthToWidth（1.5～8）</span><input type="number" id="lengthToWidth" step="0.1" min="1.5" max="8"></label>
+    <label><span>高寬比 heightToWidth（0.5～2）</span><input type="number" id="heightToWidth" step="0.05" min="0.5" max="2"></label>
+    <label><span>引擎蓋 hoodRatio</span><input type="number" id="hoodRatio" step="0.01" min="0" max="1"></label>
+    <label><span>座艙 cabinRatio</span><input type="number" id="cabinRatio" step="0.01" min="0" max="1"></label>
+    <label><span>車尾 rearRatio</span><input type="number" id="rearRatio" step="0.01" min="0" max="1"></label>
+
+    <h2>顏色</h2>
+    <label><span>車身</span><input type="color" id="colorBody" value="#c0392b"></label>
+    <label><span>輔色（條紋、貨箱、招牌）</span>
+      <span class="row"><input type="checkbox" id="secOn"><input type="color" id="colorSecondary" value="#f2f0ea"></span></label>
+    <label><span>車頂色</span>
+      <span class="row"><input type="checkbox" id="roofOn"><input type="color" id="colorRoof" value="#ffffff"></span></label>
+
+    <h2>輪子與車窗</h2>
+    <label><span>軸數</span><select id="axles"><option value="2">2</option><option value="3">3</option></select></label>
+    <label><span>輪徑</span><select id="sizeClass"><option value="normal">一般</option><option value="large">大</option></select></label>
+    <label><span>每側車窗片數（1～8）</span><input type="number" id="sidePanels" step="1" min="1" max="8"></label>
+    <label><span>後窗</span><input type="checkbox" id="rearWindow"></label>
+
+    <h2>特徵</h2>
+    <div class="checks" id="features">
+      <label><input type="checkbox" value="roof-rack">車頂架</label>
+      <label><input type="checkbox" value="roof-sign">車頂招牌</label>
+      <label><input type="checkbox" value="spare-wheel">備胎</label>
+      <label><input type="checkbox" value="cargo-box">貨箱</label>
+      <label><input type="checkbox" value="open-bed">開放貨斗</label>
+      <label><input type="checkbox" value="stripe">條紋</label>
+    </div>
+
+    <h2>不支援的特徵</h2>
+    <textarea id="unsupported" rows="3" placeholder="每行一項：特徵｜說明"></textarea>
+    <div class="msg">圖片裡有、但上面沒有的東西寫在這裡，會出現在「略過」。</div>
+  </aside>
+
+  <main>
+    <div id="view"></div>
+    <div class="below">
+      <div>
+        <h2>貼 JSON</h2>
+        <textarea id="paste" rows="8" spellcheck="false" placeholder="把視覺模型輸出的規格 JSON 貼在這裡"></textarea>
+        <div class="actions">
+          <button class="primary" id="apply">套用 JSON</button>
+          <button id="copyPrompt">複製提示詞</button>
+          <button id="dlSpec">下載 spec.json</button>
+          <button id="dlGlb">下載 .glb</button>
+        </div>
+        <div class="errors" id="errors"></div>
+        <div class="msg" id="msg"></div>
+      </div>
+      <div class="report" id="report"></div>
+    </div>
+  </main>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

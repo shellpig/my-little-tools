@@ -1,0 +1,9 @@
+{
+  "category": "vehicle",
+  "name": "綠色越野休旅",
+  "bodyType": "suv",
+  "colors": { "body": "#3da679", "secondary": null, "roof": null },
+  "wheels": { "axles": 2, "sizeClass": "large" },
+  "windows": { "sidePanels": 3, "rear": true },
+  "features": ["roof-rack", "spare-wheel"]
+}

@@ -1,0 +1,10 @@
+{ "category": "vehicle", "name": "銀色皮卡", "bodyType": "pickup",
+  "proportions": { "lengthToWidth": 2.4, "heightToWidth": 0.9, "hoodRatio": 0.28, "cabinRatio": 0.27, "rearRatio": 0.45 },
+  "colors": { "body": "#b9bcbc", "secondary": null, "roof": null },
+  "wheels": { "axles": 2, "sizeClass": "normal" },
+  "windows": { "sidePanels": 1, "rear": true },
+  "features": ["open-bed"],
+  "unsupported": [
+    { "feature": "鍍鉻水箱罩與保險桿", "note": "風格沒有金屬反光材質" },
+    { "feature": "圓形頭燈", "note": "車燈固定為方塊" },
+    { "feature": "車門後視鏡", "note": "沒有後視鏡零件" } ] }

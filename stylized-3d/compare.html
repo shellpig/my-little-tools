@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生成車 vs Kenney（開發用）</title>
+<!-- Dev only: reads ../small-town/assets/car-kit, so serve from the repo root. Not part of the deployed site. -->
+<style>
+  html, body { margin: 0; height: 100%; background: #2b2e38; color: #e8ecf3; overflow: hidden;
+    font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; }
+  canvas { display: block; }
+  #legend { position: fixed; left: 14px; top: 10px; font-size: 13px; line-height: 1.6; pointer-events: none;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .7); }
+  #err { color: #ff7b7b; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="legend">
+  <div>後排：Kenney（sedan、suv、van、truck、delivery）</div>
+  <div>前排：生成（<span id="names"></span>）</div>
+  <div id="err"></div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { validateSpec } from './schema/validate.js';
+import { createVehicle } from './generators/vehicle.js';
+
+const KENNEY = '../small-town/assets/car-kit/Models/GLB%20format/';
+const EXAMPLES = ['sedan', 'taxi', 'hatchback', 'suv', 'van', 'pickup', 'box-truck', 'bus'];
+const KENNEY_CARS = ['sedan', 'suv', 'van', 'truck', 'delivery'];
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2b2e38);
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(14, 12, 18);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(10, 0.6, 0);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x555a6a, 1.5));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(6, 10, 8);
+scene.add(sun);
+const grid = new THREE.GridHelper(60, 60, 0x555a6a, 0x3a3e4b);
+grid.position.set(10, 0, 0);
+scene.add(grid);
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+const err = msg => { document.getElementById('err').textContent += msg + ' '; };
+const style = await (await fetch('styles/small-town.json')).json();
+document.getElementById('names').textContent = EXAMPLES.join('、');
+
+const loader = new GLTFLoader();
+let x = 0;
+for (const name of KENNEY_CARS) {
+  try {
+    const gltf = await loader.loadAsync(`${KENNEY}${name}.glb`);
+    gltf.scene.position.set(x, 0, -3);
+    scene.add(gltf.scene);
+  } catch (e) { err(`Kenney ${name} 讀取失敗`); }
+  x += 3;
+}
+
+x = 0;
+for (const name of EXAMPLES) {
+  try {
+    const spec = await (await fetch(`examples/${name}.json`)).json();
+    const v = validateSpec(spec);
+    if (!v.ok) { err(`${name}：${v.errors[0]}`); continue; }
+    const { group, report } = createVehicle(spec, style);
+    const bus = spec.bodyType === 'bus';
+    x += bus ? report.dimensions.width + 0.5 : 0;
+    group.position.set(x, 0, 3);
+    scene.add(group);
+    x += bus ? 2.5 : 3;
+  } catch (e) { err(`${name}：${e.message}`); }
+}
+</script>
+</body>
+</html>

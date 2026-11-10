@@ -6,3 +6,7 @@ media-player/*
 !media-player/setup.ps1
 media-player/portable_config/watch_later/
 media-player/portable_config/cache/
+
+# stylized-3d
+stylized-3d/node_modules/
+stylized-3d/out/

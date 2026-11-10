@@ -525,12 +525,13 @@ const cache = new Map();
 
 function model(pack, name) {
   const folder = pack === 'nature' ? 'GLTF format' : 'GLB format';
-  const url = `${ASSETS}/${pack}/Models/${folder}/${name}.glb`;
+  const url = pack === 'stylized-cars' ? `${ASSETS}/stylized-cars/${name}.glb` : `${ASSETS}/${pack}/Models/${folder}/${name}.glb`;
   // Car and train models share their materials with every copy, so they
   // are clipped once here.
   if (!cache.has(url)) {
     cache.set(url, loader.loadAsync(url).then(gltf => {
-      if (pack === 'car-kit' || pack === 'train-kit') clipToMap(gltf.scene);
+      if (pack === 'car-kit' || pack === 'train-kit' || pack === 'stylized-cars') clipToMap(gltf.scene);
+      if (pack === 'stylized-cars') lightLamps(gltf.scene);
       if (pack === 'train-kit' && name.startsWith('train-')) lightCarriage(gltf.scene);
       patchSnow(gltf.scene);
       return gltf;
@@ -2124,7 +2125,7 @@ async function addPeople() {
 // come in out of the fog at the map's edge cells and leave past them. The bus
 // runs its level route, stopping at the stop cell.
 const CARS = ['vintage-sedan', 'taxi', 'suv', 'van', 'hatchback-sports', 'delivery', 'sedan', 'taxi', 'suv',
-  'van', 'hatchback-sports', 'sedan', 'truck'];
+  'van', 'hatchback-sports', 'sedan', 'truck', 'stylized:grey-sedan', 'stylized:silver-pickup', 'stylized:school-bus'];
 const PARKED = ['sedan', 'suv', 'van', 'taxi', 'hatchback-sports', 'sedan', 'suv'];
 const CAR_SCALE = 0.2;
 const BUS_LENGTH = 1.3;
@@ -2607,17 +2608,56 @@ function lightPair(group, mat, x, y, z) {
   }
 }
 
+// Wheel nodes are named wheel-front-left etc. (Kenney's spare is just wheel-back) with the origin at the wheel centre.
+function addWheelRoll(group, body) {
+  const wheels = [];
+  body.traverse(o => { if (/^wheel-(front|mid|back)-(left|right)$/.test(o.name)) wheels.push(o); });
+  if (!wheels.length) return;
+  body.updateMatrixWorld(true);
+  const radius = new THREE.Box3().setFromObject(wheels[0]).getSize(new THREE.Vector3()).y / 2;
+  group.userData.rollWheels = distance => {
+    const angle = distance / radius;
+    for (const w of wheels) w.rotation.x = (w.rotation.x + angle) % (Math.PI * 2);
+  };
+}
+
 function makeCar(gltf, headMat, tailMat) {
   const group = new THREE.Group();
   const body = gltf.scene.clone(true);
   body.scale.setScalar(CAR_SCALE);
   body.traverse(o => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
   group.add(body);
+  addWheelRoll(group, body);
   const b = new THREE.Box3().setFromObject(body);
   const half = b.max.z;
   lightPair(group, headMat, b.max.x * 0.6, b.max.y * 0.3, half + 0.004);
   lightPair(group, tailMat, b.max.x * 0.6, b.max.y * 0.3, -half - 0.004);
   return { group, length: half * 2 };
+}
+
+// Generated cars (stylized-3d): same node names as Kenney, plus lamp materials named headlight / taillight.
+// Materials are shared by every copy, so the glow is registered once per model, when it loads.
+function lightLamps(root) {
+  const lamps = { headlight: [0xfff4d6, 4], taillight: [0xff3a2a, 2.5] };
+  const seen = new Set();
+  root.traverse(o => {
+    const lamp = o.isMesh && lamps[o.material.name];
+    if (!lamp || seen.has(o.material)) return;
+    seen.add(o.material);
+    o.material.emissive.setHex(lamp[0]);
+    o.material.emissiveIntensity = 0;
+    glowing.push([o.material, lamp[1]]);
+  });
+}
+
+function makeStylizedCar(gltf) {
+  const group = new THREE.Group();
+  const body = gltf.scene.clone(true);
+  body.scale.setScalar(CAR_SCALE);
+  body.traverse(o => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  group.add(body);
+  addWheelRoll(group, body);
+  return { group, length: new THREE.Box3().setFromObject(body).getSize(new THREE.Vector3()).z };
 }
 
 function makeVintageCar() {
@@ -2718,6 +2758,7 @@ async function addTraffic() {
     model('car-kit', 'wheel-default'),
     ...CARS.map(async name => name === 'vintage-sedan'
       ? makeVintageCar()
+      : name.startsWith('stylized:') ? makeStylizedCar(await model('stylized-cars', name.slice(9)))
       : makeCar(await model('car-kit', name), headMat, tailMat)),
   ]);
   busWheel = wheel;
